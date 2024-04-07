@@ -15,6 +15,8 @@ todo:
 from os.path import *
 from dysfunctional_dectector.src.utilities.tk import check
 
+
+## dynamic input
 infaa = ''
 odir = './'
 gbk = ''

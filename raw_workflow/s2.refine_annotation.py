@@ -13,36 +13,92 @@ todo:
 
 
 
-
+from subprocess import check_call
 from glob import glob
 import pandas as pd
 from tqdm import tqdm
 from collections import defaultdict
+from Bio import SeqIO
+from Bio.KEGG import REST
+from Bio.KEGG.KGML import KGML_parser
+from Bio.Graphics.KGML_vis import KGMLCanvas
+import pandas as pd
+import numpy as np
+from os.path import exists
+
+## dynamic input
+multiple_input = True  # a switch: then the kegg_output should be a file referred to a dataframe
+kegg_output = ''
+genome_pos_file = '' # from gbk
+pseudogenes_output = ''
+ipr_output_file = ''
+
+
+# prepare a file look like this
+
+# Genome ID\tkegg output file\t ipr output file\t gbk file\t pseudogene output file
+# 
+
+## static setting
+headers = ['Protein accession',
+ 'Sequence MD5 digest',
+ 'Sequence length',
+ 'Analysis',
+ 'Signature accession',
+ 'Signature description',
+ 'Start location',
+ 'Stop location',
+ 'Score',
+ 'Status',
+ 'Date',
+ 'InterPro accession',
+ 'InterPro annotations',
+ 'GO annotations',
+ 'Pathways annotations']
+all_kos = []
+
+## OUTPUT 
+refined_ko_bindf = ''
+refined_ko_infodf = ''
 
 
 
-def get_refined_patterndf(kegg_df,locus_is_pseudo,l2all,locus2ko,
-                          targeted_kos,
-                          interpro_threshold=0.8,
+def output_file(opath,df):
+    if opath.endswith('.xlsx'):
+        df.to_excel(opath)
+    elif opath.endswith('.tsv') or opath.endswith('.tab'):
+        df.to_csv(opath,sep='\t',index=1)
+    elif opath.endswith('.csv'):
+        df.to_csv(opath,sep=',',index=1)
+    else:
+        raise IOError(f'Unknown suffix for {opath}')
+    
+def refining_KOmatrix(kegg_df,
+                      locus_is_pseudo,
+                      locus2other_analysis2ID,
+                      locus2ko,
+                      interpro_threshold=0.8,
                           verbose=1):
+    # noted: locus should be look like {GID}_{number}
+    
     confident_presence = defaultdict(dict)
     gid2ko2intact_l = defaultdict(dict)
     gid2ko2pseudo_l = defaultdict(lambda :defaultdict(list))
     ko2intact_l = defaultdict(list)
     gid2cases = defaultdict(dict)
 
-    #i = related_kosy
-    for ko in kegg_df.columns:
+    for ko in all_kos:
         ## For ko not found in this kegg_df
         if ko not in kegg_df.columns:
             for gid in kegg_df.index:
                 gid2cases[gid][ko] = 'no KEGG-annotated'
-            continue
+                continue
         ## For ko in kegg_df, search it for each gid.
-        cols = kegg_df[ko].to_dict()
+        ## first step of filtering
+        gid2locus_str = kegg_df[ko].to_dict()
         pseudo_l = []
         intact_l = []
-        for gid,locus in cols.items():
+        for gid,locus in gid2locus_str.items():
             if str(locus)=='nan':
                 cases = 'no KEGG-annotated'
                 gid2cases[gid][ko] = cases
@@ -67,12 +123,12 @@ def get_refined_patterndf(kegg_df,locus_is_pseudo,l2all,locus2ko,
     
     ko2gid2status_df = pd.DataFrame.from_dict(gid2cases)
     if verbose:
-        i = tqdm(ko2gid2status_df.iterrows(),
+        ko2row = tqdm(ko2gid2status_df.iterrows(),
                  total=ko2gid2status_df.shape[0])
     else:
-        i = ko2gid2status_df.iterrows()
+        ko2row = ko2gid2status_df.iterrows()
         
-    for ko,row in i:
+    for ko,row in ko2row:
         for gid,v in row.to_dict().items():
             if v != 'no KEGG-annotated' or ko not in ko2intact_l:
                 continue
@@ -80,19 +136,23 @@ def get_refined_patterndf(kegg_df,locus_is_pseudo,l2all,locus2ko,
                 continue
             i = ko2intact_l[ko][0]
             _a = gid+'_'
-            sub_l2all = {k:v for k,v in l2all.items()
+            # extract
+            sub_l2all = {k:v 
+                         for k,v in locus2other_analysis2ID.items()
                          if k.startswith(_a)}
             found_count = defaultdict(int)
-            for db,db_v in sorted(l2all[i].items()):
+            for db,db_v in sorted(locus2other_analysis2ID[i].items()):
                 found = {k:v
                      for k,v in sub_l2all.items()
                      if v.get(db,'') ==db_v }
                 for k,v in found.items():
                     found_count[k]+=1
-            num_db = len(l2all[i])
+            num_db = len(locus2other_analysis2ID[i])
             found_l = [k for k,v in found_count.items()
                        if v >=int(num_db*interpro_threshold)]
-            found_l = [l for l in found_l if locus2ko.get(l,'') in ['',ko]]
+            found_l = [l 
+                       for l in found_l 
+                       if locus2ko.get(l,'') in ['',ko]]
             # if found locus belongs to other KO, ignore it
             if len(found_l)==0:
                 continue
@@ -102,10 +162,11 @@ def get_refined_patterndf(kegg_df,locus_is_pseudo,l2all,locus2ko,
             else:
                 cases = 'intact'
             ko2gid2status_df.loc[ko,gid] = f"RE({cases})"
+            # RE mean retrieved 
     return ko2gid2status_df,gid2ko2pseudo_l,confident_presence
 
 
-def is_confident_pseudo(this_locus,thresholds):
+def is_confident_pseudo(this_locus,thresholds,genome_pos):
     """
     determined whether it meet the edge of the contig
     """
@@ -120,13 +181,11 @@ def is_confident_pseudo(this_locus,thresholds):
     else:
         upstream = cover_regions.index[0]
     len_of_upstream = cover_regions.loc[upstream,'end'] - cover_regions.loc[upstream,'start']
-    #print(len_of_upstream)
     low_thres,max_thres = thresholds
     if len_of_upstream<=low_thres or len_of_upstream>=max_thres:
         return True,len_of_upstream
     else:
         return False,len_of_upstream
-
 
 def assess_confident_pseudo_multi(gid2ko2pseudo_l,confident_presence,
                                   len_threshold=0.6):
@@ -164,6 +223,35 @@ def assess_confident_pseudo_multi(gid2ko2pseudo_l,confident_presence,
                 pseudo2assess_result[locus] = ('likely pseudo',ko,(low_thres,max_thres),ll)
     return pseudo2assess_result
 
+
+def fromKOtoIPR(kegg_df,gid2ipr):
+    # read KO and find it ipr-based signature
+    locus2other_analysis2ID = defaultdict(dict)
+    ko2others = defaultdict(dict)
+    ko2ipr = {}
+    for gid, ofile in tqdm(gid2ipr.items(),total=len(gid2ipr)):
+        ko2locus = {k:v for k,v in kegg_df.loc[gid,:].to_dict().items() if str(v)!='nan' and k not in ko2ipr}
+        locus2ko = {}
+        for ko,l in ko2locus.items():
+            for _ in l.split(','):
+                locus2ko[_] = ko
+        ipr_df = pd.read_csv(ofile,
+                             sep='\t',index_col=None,low_memory=False,names=headers)
+        ipr_df.pop('Sequence MD5 digest')
+        # ipr_df.pop('Pathways annotations)
+        subdf = ipr_df.loc[ipr_df['Protein accession'].isin(locus2ko),:]
+        for i,row in subdf.iterrows():
+            l = row['Protein accession']
+            locus2other_analysis2ID[l][row['Analysis']] = row['Signature accession']
+            ko = locus2ko[l]
+            if ko in ko2ipr:
+                continue
+            if row['InterPro accession'] != '-':
+                ko2ipr[ko] = row['InterPro accession']
+            else:
+                ko2others[ko][row['Analysis']] = row['Signature accession']
+    return ko2ipr, ko2others, locus2other_analysis2ID
+
 v2values = {'intact':1, 
             'no KEGG-annotated':0, 
             'confident pseudo':0.2,
@@ -172,185 +260,54 @@ v2values = {'intact':1,
             'no intact':0.5
             }
 
-
-
-
 ####### better to add another one together with the one waitting to be refined
 gid2ipr = {f.split('/')[-2].split('.')[0]:f
            for f in glob('/mnt/ivy/thliao/project/coral_ruegeria/nanopore_processing/annotations/ipr/*.anno/*.faa.tsv')}
-kegg_df = pd.read_csv(
-    '/mnt/ivy/thliao/project/coral_ruegeria/nanopore_processing/annotations/KEGG_anno_Revised.tsv', sep='\t', index_col=0)
+# kegg_df = pd.read_csv(    '/mnt/ivy/thliao/project/coral_ruegeria/nanopore_processing/annotations/KEGG_anno_Revised.tsv', sep='\t', index_col=0)
+
+
+# genome_pos = pd.read_csv('/mnt/ivy/thliao/project/coral_ruegeria/nanopore_processing/76genomes_pos.tsv',sep='\t',index_col=0)
+# genome_pos.loc[:,'is pseudo'] = ['Yes' if ':' in str(_) else 'No' for _ in genome_pos['pseudogenized']]
+# genome_pos.loc[:,'genome'] = [_.split('_')[0] for _ in genome_pos['contig']]
+
+
+
+###### main ######
+if multiple_input:
+    kegg_df = pd.read_csv(kegg_output, sep='\t', index_col=0)
+    genome_pos  = pd.read_csv(genome_pos_file,sep='\t',index_col=0)
+else:
+    sub_kegg_df = pd.read_csv(kegg_output, sep='\t', index_col=0)
+    genome_pos  = pd.read_csv(genome_pos_file,sep='\t',index_col=0)
+    ## todo: turn a single one into a dataframe
+    
+    
+locus2contig = genome_pos['contig'].to_dict()
+locus_is_pseudo = set(list(genome_pos.index[genome_pos['pseudogenized'].str.contains(':')]))
+    
 locus2ko = {locus: ko
             for ko, _d in kegg_df.to_dict().items()
             for genome, locus_list in _d.items()
             for locus in str(locus_list).split(',')}
 
-genome_pos = pd.read_csv('/mnt/ivy/thliao/project/coral_ruegeria/nanopore_processing/76genomes_pos.tsv',sep='\t',index_col=0)
-genome_pos.loc[:,'is pseudo'] = ['Yes' if ':' in str(_) else 'No' for _ in genome_pos['pseudogenized']]
-genome_pos.loc[:,'genome'] = [_.split('_')[0] for _ in genome_pos['contig']]
-locus2contig = genome_pos['contig'].to_dict()
-locus_is_pseudo = set(list(genome_pos.index[genome_pos['pseudogenized'].str.contains(':')]))
+ko2ipr, ko2others, locus2other_analysis2ID = fromKOtoIPR(kegg_df,gid2ipr)
+ko2gid2status_df,gid2ko2pseudo_l,confident_presence = refining_KOmatrix(kegg_df,locus_is_pseudo,locus2other_analysis2ID,locus2ko,verbose=1)
+pseudo2assess_result = assess_confident_pseudo_multi(gid2ko2pseudo_l,confident_presence,len_threshold=0.6)
 
-
-headers = ['Protein accession',
- 'Sequence MD5 digest',
- 'Sequence length',
- 'Analysis',
- 'Signature accession',
- 'Signature description',
- 'Start location',
- 'Stop location',
- 'Score',
- 'Status',
- 'Date',
- 'InterPro accession',
- 'InterPro annotations',
- 'GO annotations',
- 'Pathways annotations']
-
-l2all = defaultdict(dict)
-ko2others = defaultdict(dict)
-ko2ipr = {}
-for gid, ofile in tqdm(gid2ipr.items()):
-    ko2locus = {k:v for k,v in kegg_df.loc[gid,:].to_dict().items() if str(v)!='nan' and k not in ko2ipr}
-    locus2ko = {}
-    for ko,l in ko2locus.items():
-        for _ in l.split(','):
-            locus2ko[_] = ko
-    ipr_df = pd.read_csv(ofile,sep='\t',index_col=None,low_memory=False,names=headers)
-    ipr_df.pop('Sequence MD5 digest')
-    # ipr_df.pop('Pathways annotations)
-    subdf = ipr_df.loc[ipr_df['Protein accession'].isin(locus2ko),:]
-    for i,row in subdf.iterrows():
-        l = row['Protein accession']
-        l2all[l][row['Analysis']] = row['Signature accession']
-        ko = locus2ko[l]
-        if ko in ko2ipr:
-            continue
-        if row['InterPro accession'] != '-':
-            ko2ipr[ko] = row['InterPro accession']
-        else:
-            ko2others[ko][row['Analysis']] = row['Signature accession']
-
-
-related_kos = list(kegg_df.columns)
-ko2gid2status_df,gid2ko2pseudo_l,confident_presence = get_refined_patterndf(kegg_df,locus_is_pseudo,l2all,locus2ko,
-                                                                            related_kos,verbose=1)
-pseudo2assess_result = assess_confident_pseudo_multi(gid2ko2pseudo_l,confident_presence,
-                                  len_threshold=0.6)
 copy_df = ko2gid2status_df.copy()
 for locus,(_,ko,_,_) in pseudo2assess_result.items():
     gid = locus.split('_')[0]
     ori = copy_df.loc[ko,gid]
     if ori == 'RE(no intact)':
         copy_df.loc[ko,gid] = 'confident pseudo'
-    
 bin_df = copy_df.applymap(lambda x:v2values[x])
-bin_df = bin_df.reindex(index=related_kos)
-bin_df.to_excel('/mnt/ivy/thliao/project/coral_ruegeria/ipynb/functional_annotations/Forcurated_biotin.xlsx')      
 
-gid2kos = defaultdict(list)
-for gid,col in copy_df.iteritems():
-    for ko,v in col.to_dict().items():
-        if v not in ['confident pseudo','no KEGG-annotated']:
-            gid2kos[gid].append(ko)
-gid2kos = {k:list(set(v)) for k,v in gid2kos.items()}
+output_file(refined_ko_infodf,copy_df)
+output_file(refined_ko_bindf,bin_df)
 
 
 
 
 
-################
-"Manual refine the KEGG annotations from KEGG database"
-###############
-from Bio import SeqIO
-from Bio.KEGG import REST
-from Bio.KEGG.KGML import KGML_parser
-from Bio.Graphics.KGML_vis import KGMLCanvas
 
-cmd = f"makeblastdb -in /mnt/ivy/thliao/project/ruegeria_prophage/data/prokka_o/GNM000011965/GNM000011965.faa -dbtype prot -out GNM0000111965; "
-
-import pandas as pd
-import numpy as np
-
-kegg_df = pd.read_csv(
-    '/mnt/ivy/thliao/project/coral_ruegeria/nanopore_processing/annotations/KEGG_anno_Revised.tsv', sep='\t', index_col=0)
-my_faa = '/mnt/ivy/thliao/project/ruegeria_prophage/data/prokka_o/GNM000014065/GNM000014065.faa'
-_ko2locus = {k:v for k,v in kegg_df.loc['GNM000014065',:].to_dict().items() if str(v)!='nan'}
-_l2ko = {}
-for ko,ll in _ko2locus.items():
-    for l in ll.split(','):
-        _l2ko[l] = ko
-result = REST.kegg_link("ko", "sit").read()
-locus2ko = {}
-for row in result.strip().split('\n'):
-    l,k = row.split('\t')
-    locus2ko[l.split(':')[-1]] = k.split(':')[-1]
-ko2locus = defaultdict(list)
-for l,k in locus2ko.items():
-    ko2locus[k].append(l)
-ko2ref = {}
-ref_p = '/mnt/ivy/thliao/project/coral_ruegeria/tmp/GCA_000014065.1.faa'
-_df = pd.read_csv('/mnt/ivy/thliao/project/coral_ruegeria/tmp/GNM000014065.tab',sep='\t',header=None)
-_df.sort_values(2,ascending=False).groupby(0).head(1)
-l2l = {}
-for _,row in _df.iterrows():
-    if row[2]>=99:
-        l2l[row[0]] = row[1]
-new_l2ko = {}
-same_c = 0
-for l1,l2 in l2l.items():
-    ko1 = locus2ko.get(l1,'')
-    ko2 = _l2ko.get(l2,'')
-    # if ko1==ko2 and ko1!='':
-    #     same_c+=1
-    # elif ko1!='' or ko2!='':
-    #     print(l1,ko1,l2,ko2)
-    if ko1!='':
-        new_l2ko[l2] = ko1
-ko2l = defaultdict(list)
-for l,ko in new_l2ko.items():
-    ko2l[ko].append(l)
-ko2l = {k:','.join(sorted(v)) for k,v in ko2l.items()}
-for k in ko2l:
-    kegg_df.loc['GNM000014065',k] = ko2l[k]
-for k in kegg_df.columns:
-    if k not in ko2l:
-        kegg_df.loc['GNM000014065',k] = np.nan
-
-
-# 'sil'
-result = REST.kegg_link("ko", "sil").read()
-locus2ko = {}
-for row in result.strip().split('\n'):
-    l,k = row.split('\t')
-    locus2ko[l.split(':')[-1]] = k.split(':')[-1]
-_df = pd.read_csv('/mnt/ivy/thliao/project/coral_ruegeria/tmp/GNM000011965.tab',sep='\t',header=None)
-_df.sort_values(2,ascending=False).groupby(0).head(1)
-l2l = {}
-for _,row in _df.iterrows():
-    if row[2]>=99:
-        l2l[row[0]] = row[1]
-new_l2ko = {}
-same_c = 0
-for l1,l2 in l2l.items():
-    ko1 = locus2ko.get(l1,'')
-    ko2 = _l2ko.get(l2,'')
-    # if ko1==ko2 and ko1!='':
-    #     same_c+=1
-    # elif ko1!='' or ko2!='':
-    #     print(l1,ko1,l2,ko2)
-    if ko1!='':
-        new_l2ko[l2] = ko1
-ko2l = defaultdict(list)
-for l,ko in new_l2ko.items():
-    ko2l[ko].append(l)
-ko2l = {k:','.join(sorted(v)) for k,v in ko2l.items()}
-for k in ko2l:
-    kegg_df.loc['GNM000011965',k] = ko2l[k]
-for k in kegg_df.columns:
-    if k not in ko2l:
-        kegg_df.loc['GNM000011965',k] = np.nan
-
-kegg_df.to_csv('/mnt/ivy/thliao/project/coral_ruegeria/nanopore_processing/annotations/KEGG_anno_Revised.tsv', sep='\t', index=1)
 
