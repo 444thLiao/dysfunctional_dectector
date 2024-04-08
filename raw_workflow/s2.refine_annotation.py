@@ -25,7 +25,7 @@ from Bio.Graphics.KGML_vis import KGMLCanvas
 import pandas as pd
 import numpy as np
 from os.path import exists
-
+from dysfunctional_dectector.src.utilities.tk import output_file
 ## dynamic input
 multiple_input = True  # a switch: then the kegg_output should be a file referred to a dataframe
 kegg_output = ''
@@ -63,15 +63,6 @@ refined_ko_infodf = ''
 
 
 
-def output_file(opath,df):
-    if opath.endswith('.xlsx'):
-        df.to_excel(opath)
-    elif opath.endswith('.tsv') or opath.endswith('.tab'):
-        df.to_csv(opath,sep='\t',index=1)
-    elif opath.endswith('.csv'):
-        df.to_csv(opath,sep=',',index=1)
-    else:
-        raise IOError(f'Unknown suffix for {opath}')
     
 def refining_KOmatrix(kegg_df,
                       locus_is_pseudo,
