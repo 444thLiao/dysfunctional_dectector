@@ -113,15 +113,16 @@ def cli(file_input,folder_output):
                     seq_name = fea.qualifiers.get("locus_tag", [""])[0]
                     if not seq_name:
                         seq_name = fea.qualifiers.get("protein_id", [""])[0]
-                _seq = Seq(fea.qualifiers.get("translation",[''])[0])
-                new_record = SeqRecord(
-                    seq=_seq,
-                    id=seq_name,
-                    name=fea.qualifiers.get("gene", [""])[0],
-                    description=fea.qualifiers.get("product",[""])[0],
-                )
-                faa_list.append(new_record)
-                idx += 1
+                if fea.type == "CDS":
+                    _seq = Seq(fea.qualifiers.get("translation",[''])[0])
+                    new_record = SeqRecord(
+                        seq=_seq,
+                        id=seq_name,
+                        name=fea.qualifiers.get("gene", [""])[0],
+                        description=fea.qualifiers.get("product",[""])[0],
+                    )
+                    faa_list.append(new_record)
+                    idx += 1
         if not exists(os.path.dirname(infaa)):
             os.makedirs(os.path.dirname(infaa))
         with open(faafgbk, "w") as f1:
