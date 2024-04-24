@@ -85,7 +85,7 @@ def processing_IO(file_input,folder_output):
     #check the consistence of the input file
     file_input = [realpath(_) for _ in file_input]
 
-    gbk_seq = defaultdict(list)
+    gbk_seq = {}
     faa_seq = defaultdict(list)
     for file in file_input:
         extens = basename(file).split(".")[-1]
@@ -99,8 +99,7 @@ def processing_IO(file_input,folder_output):
             records = list(SeqIO.parse(file, "fasta"))
             for record in records:
                 sequence = record.seq
-                faa_seq.append(sequence)
-            faa_seq[genomename] = gbk2faa(gbk)
+                faa_seq[genomename].append(sequence)
         else:
             logging.error(f"The format of {file_input} is incorrect")
             print(f"The format of {file_input} is incorrect")
@@ -128,7 +127,7 @@ def processing_IO(file_input,folder_output):
 @click.option('-o',"--folder_output",type = str, nargs = 1 ,required = True, prompt = "Enter the output folder name", help = "Please input path of folder you want to analyze")
 @click.option("-d","dry_run",help="Generate command only.",default=False,required=False,is_flag=True,)
 def cli(file_input,folder_output,dry_run):
-    in_files,odir,temp_dir = processing_IO(file_input,folder_output,dry_run)
+    in_files,odir,temp_dir = processing_IO(file_input,folder_output)
     for genomename,info in in_files.items():
         ingbk = info['gbk']
         infaa = info['faa']
@@ -142,10 +141,10 @@ def cli(file_input,folder_output,dry_run):
         os.makedirs(ogdir,exist_ok=True)
         kofams = f"{KOFAMSCAN_exe} -p {KOFAMSCAN_profiles} -k {KOFAMSCAN_ko_list} --tmp-dir {temp_dir}/{genomename}_kofamscan --cpu {num_cpu} -o {kegg_oname} -f mapper-one-line --no-report-unannotated {infaa} "
         kofams += f' && rm -rf {temp_dir}/{genomename}_kofamscan'
-        check(kegg_oname,kofams,'pseudofinder',dry_run=dry_run)
+        cmds = check(kegg_oname,kofams,'pseudofinder',dry_run=dry_run)
         logger.debug("Start KoFamscan")
         try:
-            Kofampros = Process(target=os.system, args=(kofams,))
+            Kofampros = Process(target=os.system, args=tuple(cmds))
             Kofampros.start()
             Kofampros.join()
             logger.debug("The KofanScan has done")
@@ -155,10 +154,10 @@ def cli(file_input,folder_output,dry_run):
         logger.debug("Files for interproscan and pseudofinder are ready")
         ######### Run interpro
         iprcmd = f"""mkdir -p {ipr_oname} && export LD_LIBRARY_PATH='' && {ipr_exe} -i {infaa} -d {ipr_oname} -cpu {num_cpu} -iprlookup -appl CDD,Pfam"""
-        check(ipr_oname,iprcmd,'interpro')
+        cmds = check(ipr_oname,iprcmd,'interpro')
         logger.debug("Interproscan start")
         try:
-            iprpros = Process(target=os.system,args=(iprcmd,))
+            iprpros = Process(target=os.system,args=tuple(cmds))
             iprpros.start()
             iprpros.join()
             logger.debug("The interproscan has done")
@@ -167,10 +166,10 @@ def cli(file_input,folder_output,dry_run):
             exit()
         ######### Run pseudofinder   
         pseudocmd = f"mkdir -p {pseudo_oname} ; {pseudofinder_exe} annotate -db {diamond_db}  -g {ingbk} -t {num_cpu} -skpdb -op {pseudo_oname}/{genomename}_nr -di -l 0.8 --compliant --diamond_path {diamond_path}"
-        check(finalname,pseudocmd,'pseudofinder',dry_run=dry_run)
+        cmds = check(finalname,pseudocmd,'pseudofinder',dry_run=dry_run)
         logger.debug("Pseudofinder start")
         try:
-            psdpros = Process(target=os.system,args=(pseudocmd,))
+            psdpros = Process(target=os.system,args=tuple(cmds))
             psdpros.start()
             psdpros.join()
             logger.debug("The pseudofinder has done")

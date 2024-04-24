@@ -1,8 +1,9 @@
 from os.path import exists,dirname
 import os
+import logging
 
-
-def check(ofile,cmd,name,dry_run=True):
+def check(ofile,cmd,name,dry_run=True,LOGGER=logging.getLogger('dysfunction_logger')):
+    executed_cmd=[]
     if exists(ofile):
         LOGGER.append(f'{name} existed')
     else:
@@ -10,8 +11,9 @@ def check(ofile,cmd,name,dry_run=True):
             os.makedirs(dirname(ofile))
         LOGGER.append(f'{name} run {cmd}')
     if (not dry_run) and (not exists(ofile)):
-        #print(name)
+        #executed_cmd.append(cmd)
         executed_cmd.append(cmd)
+    return executed_cmd
         
         
 def batch_iter(iter, batch_size):
