@@ -4,3 +4,5 @@ https://github.com/Edinburgh-Genome-Foundry/DnaFeaturesViewer
 
 
 
+pip install biopython==1.79
+

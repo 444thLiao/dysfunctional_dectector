@@ -5,13 +5,12 @@ import logging
 def check(ofile,cmd,name,dry_run=True,LOGGER=logging.getLogger('dysfunction_logger')):
     executed_cmd=[]
     if exists(ofile):
-        LOGGER.append(f'{name} existed')
+        LOGGER.debug(f'{name} existed')
     else:
         if not dry_run and not exists(dirname(ofile)):
             os.makedirs(dirname(ofile))
-        LOGGER.append(f'{name} run {cmd}')
+        LOGGER.debug(f'{name} run following command: \n {cmd}')
     if (not dry_run) and (not exists(ofile)):
-        #executed_cmd.append(cmd)
         executed_cmd.append(cmd)
     return executed_cmd
         

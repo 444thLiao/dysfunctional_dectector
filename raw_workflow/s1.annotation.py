@@ -1,6 +1,6 @@
 """
 KEGG, ipr, pseudofinder annotations
-1. 
+1.
 2.
 todo:
 1. make it accept and run multiple inputs
@@ -49,7 +49,6 @@ suffix_protein = 'faa'
 
 
 def gbk2faa(gbk):
-    #gbk_seq = []
     records = list(SeqIO.parse(gbk, format="genbank"))
     faa_list = []
     for contig in records:
@@ -64,24 +63,24 @@ def gbk2faa(gbk):
                 seq_name = fea.qualifiers.get("locus_tag", [""])[0]
                 if not seq_name:
                     seq_name = fea.qualifiers.get("protein_id", [""])[0]
-            
-                _seq = Seq(fea.qualifiers.get("translation",[''])[0])
-                new_record = SeqRecord(
-                    seq=_seq,
-                    id=seq_name,
-                    name=fea.qualifiers.get("gene", [""])[0],
-                    description=fea.qualifiers.get("product",[""])[0],
-                    )
-                faa_list.append(new_record)
-                idx += 1            
+            _seq = Seq(fea.qualifiers.get("translation",[''])[0])
+            new_record = SeqRecord(
+                seq=_seq,
+                id=seq_name,
+                name=fea.qualifiers.get("gene", [""])[0],
+                description=fea.qualifiers.get("product",[""])[0],
+                )
+            faa_list.append(new_record)
+            idx += 1
     return faa_list
+
 
 def processing_IO(file_input,folder_output):
     in_files = defaultdict(dict)
     odir = folder_output
     temp_dir = odir + "/temp_file"
     os.makedirs(temp_dir,exist_ok=True)
-                
+
     #check the consistence of the input file
     file_input = [realpath(_) for _ in file_input]
 
@@ -93,20 +92,20 @@ def processing_IO(file_input,folder_output):
         if extens == suffix_gbk:
             gbk = file
             gbk_seq[genomename] = gbk2faa(gbk)
+            if len(gbk_seq[genomename])==0:
+                logger.debug(f"Genbank file doesn't have protein sequences.")
             in_files[genomename]['gbk'] = gbk
         elif extens == suffix_protein:
             infaa = file
             records = list(SeqIO.parse(file, "fasta"))
-            for record in records:
-                sequence = record.seq
-                faa_seq[genomename].append(sequence)
+            faa_seq[genomename] = [str(_.seq) for _ in records]
         else:
             logging.error(f"The format of {file_input} is incorrect")
             print(f"The format of {file_input} is incorrect")
             exit()
-    if gbk_seq == faa_seq:
+    if set([str(_.seq) for _ in gbk_seq[genomename]]) == set(faa_seq[genomename]):
         in_files[genomename]['faa'] = infaa
-        logger.debug("The faa and gbk file are consistent.Input faa file will be used.")
+        logger.debug("The faa and gbk file are consistent. Input faa file will be used.")
     else:
         filename = genomename+ "_gbk.faa"
         faafgbk = os.path.join(temp_dir,filename)
@@ -114,24 +113,18 @@ def processing_IO(file_input,folder_output):
             os.makedirs(os.path.dirname(infaa))
         with open(faafgbk, "w") as f1:
             SeqIO.write(gbk_seq[genomename], f1, "fasta")
-        logger.debug(f"Gbk file have been converted to faa file (see {filename})")
+        logger.debug(f"Genbank file have been converted to faa file (see {filename})")
         in_files[genomename]['faa'] = faafgbk
-        logger.debug("The aa and gbk file are not consistent.The faa file converted from input gbk file will be used.")
-    logger.debug("Check for the consistence has done.")
-    
+        logger.debug("The protein and gbk file are not consistent. The faa file converted from input gbk file will be used.")
+
     return in_files,odir,temp_dir
 
-# parse args
-@click.command()
-@click.option('-fi',"--file_input",type = str, nargs = 2 ,required = True, prompt = "Enter the input file name", help = "Please input faa or gbk file you want to analyze")
-@click.option('-o',"--folder_output",type = str, nargs = 1 ,required = True, prompt = "Enter the output folder name", help = "Please input path of folder you want to analyze")
-@click.option("-d","dry_run",help="Generate command only.",default=False,required=False,is_flag=True,)
-def cli(file_input,folder_output,dry_run):
-    in_files,odir,temp_dir = processing_IO(file_input,folder_output)
+
+def run_annotate(in_files,odir,temp_dir,dry_run=False):
     for genomename,info in in_files.items():
         ingbk = info['gbk']
         infaa = info['faa']
-        ## OUTPUT 
+        ## OUTPUT
         kegg_oname = os.path.join(odir,'KOFAMSCAN',genomename+'.kofamout')
         pseudo_oname = os.path.join(odir,'pseudofinder',genomename)
         finalname = os.path.join(pseudo_oname,f'{genomename}_nr_pseudos.gff')
@@ -141,12 +134,13 @@ def cli(file_input,folder_output,dry_run):
         os.makedirs(ogdir,exist_ok=True)
         kofams = f"{KOFAMSCAN_exe} -p {KOFAMSCAN_profiles} -k {KOFAMSCAN_ko_list} --tmp-dir {temp_dir}/{genomename}_kofamscan --cpu {num_cpu} -o {kegg_oname} -f mapper-one-line --no-report-unannotated {infaa} "
         kofams += f' && rm -rf {temp_dir}/{genomename}_kofamscan'
-        cmds = check(kegg_oname,kofams,'pseudofinder',dry_run=dry_run)
+        cmds = check(kegg_oname,kofams,'kofamscan',dry_run=dry_run)
         logger.debug("Start KoFamscan")
         try:
-            Kofampros = Process(target=os.system, args=tuple(cmds))
-            Kofampros.start()
-            Kofampros.join()
+            if cmds:
+                Kofampros = Process(target=os.system, args=tuple(cmds))
+                Kofampros.start()
+                Kofampros.join()
             logger.debug("The KofanScan has done")
         except CalledProcessError as err:
             logger.error(f"The KofamScan fail to finish due to {err}")
@@ -154,28 +148,40 @@ def cli(file_input,folder_output,dry_run):
         logger.debug("Files for interproscan and pseudofinder are ready")
         ######### Run interpro
         iprcmd = f"""mkdir -p {ipr_oname} && export LD_LIBRARY_PATH='' && {ipr_exe} -i {infaa} -d {ipr_oname} -cpu {num_cpu} -iprlookup -appl CDD,Pfam"""
-        cmds = check(ipr_oname,iprcmd,'interpro')
+        cmds = check(ipr_oname,iprcmd,'interpro',dry_run=dry_run)
         logger.debug("Interproscan start")
         try:
-            iprpros = Process(target=os.system,args=tuple(cmds))
-            iprpros.start()
-            iprpros.join()
+            if cmds:
+                iprpros = Process(target=os.system,args=tuple(cmds))
+                iprpros.start()
+                iprpros.join()
             logger.debug("The interproscan has done")
         except CalledProcessError as err:
             logger.error(f"The interproscan fail to finish due to {err}")
             exit()
-        ######### Run pseudofinder   
+        ######### Run pseudofinder
         pseudocmd = f"mkdir -p {pseudo_oname} ; {pseudofinder_exe} annotate -db {diamond_db}  -g {ingbk} -t {num_cpu} -skpdb -op {pseudo_oname}/{genomename}_nr -di -l 0.8 --compliant --diamond_path {diamond_path}"
         cmds = check(finalname,pseudocmd,'pseudofinder',dry_run=dry_run)
         logger.debug("Pseudofinder start")
         try:
-            psdpros = Process(target=os.system,args=tuple(cmds))
-            psdpros.start()
-            psdpros.join()
+            if cmds:
+                psdpros = Process(target=os.system,args=tuple(cmds))
+                psdpros.start()
+                psdpros.join()
             logger.debug("The pseudofinder has done")
         except CalledProcessError as err:
             logger.error(f"The pseudofinder fail to finish due to {err}")
             exit()
+
+
+# parse args
+@click.command()
+@click.option('-fi',"--file_input",type = str, nargs = 2 ,required = True, prompt = "Enter the input file name", help = "Please input faa or gbk file you want to analyze")
+@click.option('-o',"--folder_output",type = str, nargs = 1 ,required = True, prompt = "Enter the output folder name", help = "Please input path of folder you want to analyze")
+@click.option("-d","dry_run",help="Generate command only.",default=False,required=False,is_flag=True,)
+def cli(file_input,folder_output,dry_run):
+    in_files,odir,temp_dir = processing_IO(file_input,realpath(folder_output))
+    run_annotate(in_files,odir,temp_dir,dry_run)
 
 
 ######### RUN
