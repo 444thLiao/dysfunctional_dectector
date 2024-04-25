@@ -127,7 +127,7 @@ def run_annotate(in_files,odir,temp_dir,dry_run=False):
         ## OUTPUT
         kegg_oname = os.path.join(odir,'KOFAMSCAN',genomename+'.kofamout')
         pseudo_oname = os.path.join(odir,'pseudofinder',genomename)
-        finalname = os.path.join(pseudo_oname,f'{genomename}_nr_pseudos.gff')
+        pseudofinder_finalname = os.path.join(pseudo_oname,f'{genomename}_nr_pseudos.gff')
         ipr_oname = os.path.join(odir,'ipr',genomename)
         ######### Run kofamscan
         ogdir = os.path.join(odir,'KOFAMSCAN')
@@ -148,7 +148,8 @@ def run_annotate(in_files,odir,temp_dir,dry_run=False):
         logger.debug("Files for interproscan and pseudofinder are ready")
         ######### Run interpro
         iprcmd = f"""mkdir -p {ipr_oname} && export LD_LIBRARY_PATH='' && {ipr_exe} -i {infaa} -d {ipr_oname} -cpu {num_cpu} -iprlookup -appl CDD,Pfam"""
-        cmds = check(ipr_oname,iprcmd,'interpro',dry_run=dry_run)
+        ipr_finalname = join(ipr_oname,basename(infaa)+'.tsv')
+        cmds = check(ipr_finalname,iprcmd,'interpro',dry_run=dry_run)
         logger.debug("Interproscan start")
         try:
             if cmds:
@@ -161,7 +162,7 @@ def run_annotate(in_files,odir,temp_dir,dry_run=False):
             exit()
         ######### Run pseudofinder
         pseudocmd = f"mkdir -p {pseudo_oname} ; {pseudofinder_exe} annotate -db {diamond_db}  -g {ingbk} -t {num_cpu} -skpdb -op {pseudo_oname}/{genomename}_nr -di -l 0.8 --compliant --diamond_path {diamond_path}"
-        cmds = check(finalname,pseudocmd,'pseudofinder',dry_run=dry_run)
+        cmds = check(pseudofinder_finalname,pseudocmd,'pseudofinder',dry_run=dry_run)
         logger.debug("Pseudofinder start")
         try:
             if cmds:

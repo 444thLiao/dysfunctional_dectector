@@ -2,7 +2,7 @@ from os.path import exists,dirname
 import os
 import logging
 
-def check(ofile,cmd,name,dry_run=True,LOGGER=logging.getLogger('dysfunction_logger')):
+def check(ofile,cmd,name,dry_run=False,LOGGER=logging.getLogger('dysfunction_logger')):
     executed_cmd=[]
     if exists(ofile):
         LOGGER.debug(f'{name} existed')
@@ -12,6 +12,8 @@ def check(ofile,cmd,name,dry_run=True,LOGGER=logging.getLogger('dysfunction_logg
         LOGGER.debug(f'{name} run following command: \n {cmd}')
     if (not dry_run) and (not exists(ofile)):
         executed_cmd.append(cmd)
+    elif dry_run:
+        LOGGER.debug(f" '{cmd}' would not run.")
     return executed_cmd
         
         
