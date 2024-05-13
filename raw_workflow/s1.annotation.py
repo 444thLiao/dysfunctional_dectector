@@ -212,11 +212,17 @@ def run_annotate(in_files,odir,temp_dir,dry_run=False):
         cmd3 = f"python {mergedpseudo_script} -i {pseudofinder_finalname} -o {odir} step3;"
         cmd4 = f"python {mergedpseudo_script} -i {pseudofinder_finalname} -o {odir} merge;"
         cmd = ';'.join([cmd1,cmd2,cmd3,cmd4])
-
-        psdpros = Process(target=os.system,args=tuple([cmd]))
-        psdpros.start()
-        psdpros.join()
-        logger.debug("Done")
+        
+        cmds = check(pseudofinder_merged_file,cmd,'Merged pseudofinder',dry_run=dry_run)
+        try:
+            if cmds:
+                psdpros = Process(target=os.system,args=tuple(cmds))
+                psdpros.start()
+                psdpros.join()
+            logger.debug("The pseudofinder has been merged")
+        except CalledProcessError as err:
+            logger.error(f"The pseudofinder fail to finish due to {err}")
+            exit()
         ## generate genome_pos
         pos_df = gen_genome_pos(ingbk,pseudofinder_merged_file)
         os.makedirs(dirname(pos_oname),exist_ok=True)
