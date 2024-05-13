@@ -8,15 +8,18 @@ todo:
 3. enable logging
 """
 from os.path import *
-from dysfunctional_dectector.src.utilities.tk import check
+from dysfunctional_dectector.src.utilities.tk import check,parse_gbk
 #import modules
 import logging
 import click
+from tqdm import tqdm
 from sys import exit
 from Bio import SeqIO
 from Bio.SeqRecord import SeqRecord
 from Bio.Seq import Seq
 import os
+import portion as P
+import pandas as pd
 from subprocess import CalledProcessError
 from multiprocessing import Process
 from collections import defaultdict
@@ -43,6 +46,7 @@ diamond_db = "/home-db/pub/protein_db/nr/v20230523/diamond_index/nr.dmnd"
 pseudofinder_exe = 'python3 /mnt/storage3/yfdai/download/pseudofinder/pseudofinder-master/pseudofinder.py'
 ipr_exe = '/mnt/storage3/yfdai/download/interproscan/interproscan-5.67-99.0/interproscan.sh'
 num_cpu = 5
+mergedpseudo_script = join(dirname(dirname(__file__)),'src','pseudofinder_api','merged_pseudo.py')
 
 suffix_gbk = 'gbk'
 suffix_protein = 'faa'
@@ -119,6 +123,30 @@ def processing_IO(file_input,folder_output):
 
     return in_files,odir,temp_dir
 
+def gen_genome_pos(gbk,pseudo_file):
+    locus2info = parse_gbk(gbk)
+    locus2info = pd.DataFrame.from_dict(locus2info).T
+    locus2info.columns = ['contig', 'start', 'end', 'strand']
+
+    pseudo_df_nano = pd.read_csv(pseudo_file,sep='\t',index_col=0)
+
+    contig2interval = defaultdict(list)
+    for _, row in tqdm(pseudo_df_nano.iterrows(), total=pseudo_df_nano.shape[0]):
+        contig2interval[row["contig"]].append( (P.closed(row["start"], row["end"]), _ )  )
+    sdf = locus2info
+    pseudo = []
+    for _, row in sdf.iterrows():
+        cand = contig2interval[row["contig"]]
+        s, e = row['start'], row['end']
+        i = P.closed(s, e)
+        any_overlap = [c[1] for c in cand if c[0].overlaps(i)]
+        if len(any_overlap)!=0:
+            pseudo.append(';'.join(any_overlap))
+        else:
+            pseudo.append('NOT')
+    sdf.loc[:, 'pseudogenized'] = pseudo  
+    return sdf
+
 
 def run_annotate(in_files,odir,temp_dir,dry_run=False):
     for genomename,info in in_files.items():
@@ -129,6 +157,8 @@ def run_annotate(in_files,odir,temp_dir,dry_run=False):
         pseudo_oname = os.path.join(odir,'pseudofinder',genomename)
         pseudofinder_finalname = os.path.join(pseudo_oname,f'{genomename}_nr_pseudos.gff')
         ipr_oname = os.path.join(odir,'ipr',genomename)
+        pos_oname = os.path.join(odir,'pos',genomename+'_pos.tsv')
+        pseudofinder_merged_file = os.path.join(pseudo_oname,f'pseudofinderALL_w_annot_MERGEDcontinuous.tsv')
         ######### Run kofamscan
         ogdir = os.path.join(odir,'KOFAMSCAN')
         os.makedirs(ogdir,exist_ok=True)
@@ -173,11 +203,28 @@ def run_annotate(in_files,odir,temp_dir,dry_run=False):
         except CalledProcessError as err:
             logger.error(f"The pseudofinder fail to finish due to {err}")
             exit()
+        ######### Run pseudofinder merged script
+        logger.debug("Try to parse pseudofinder result and merged some splitted pseudogenes.")
+        odir = dirname(pseudofinder_finalname)
+        
+        cmd1 = f"python {mergedpseudo_script} -i {pseudofinder_finalname} -o {odir} step1;"
+        cmd2 = f"python {mergedpseudo_script} -i {pseudofinder_finalname} -o {odir} -gp {ingbk} step2;"
+        cmd3 = f"python {mergedpseudo_script} -i {pseudofinder_finalname} -o {odir} step3;"
+        cmd4 = f"python {mergedpseudo_script} -i {pseudofinder_finalname} -o {odir} merge;"
+        cmd = ';'.join([cmd1,cmd2,cmd3,cmd4])
 
+        psdpros = Process(target=os.system,args=tuple([cmd]))
+        psdpros.start()
+        psdpros.join()
+        logger.debug("Done")
+        ## generate genome_pos
+        pos_df = gen_genome_pos(ingbk,pseudofinder_merged_file)
+        os.makedirs(dirname(pos_oname),exist_ok=True)
+        pos_df.to_csv(pos_oname,sep='\t',index=1)
 
 # parse args
 @click.command()
-@click.option('-fi',"--file_input",type = str, nargs = 2 ,required = True, prompt = "Enter the input file name", help = "Please input faa or gbk file you want to analyze")
+@click.option('-fi',"--file_input",type = str, nargs = 2 ,required = True, prompt = "Enter the input file name", help = "Please input faa and gbk file you want to analyze")
 @click.option('-o',"--folder_output",type = str, nargs = 1 ,required = True, prompt = "Enter the output folder name", help = "Please input path of folder you want to analyze")
 @click.option("-d","dry_run",help="Generate command only.",default=False,required=False,is_flag=True,)
 def cli(file_input,folder_output,dry_run):

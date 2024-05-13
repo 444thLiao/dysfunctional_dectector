@@ -24,6 +24,7 @@ from Bio.KEGG.KGML import KGML_parser
 from Bio.Graphics.KGML_vis import KGMLCanvas
 import pandas as pd
 import numpy as np
+import click
 from os.path import exists
 from dysfunctional_dectector.src.utilities.tk import output_file
 ## dynamic input
@@ -255,8 +256,6 @@ v2values = {'intact':1,
 gid2ipr = {f.split('/')[-2].split('.')[0]:f
            for f in glob('/mnt/ivy/thliao/project/coral_ruegeria/nanopore_processing/annotations/ipr/*.anno/*.faa.tsv')}
 # kegg_df = pd.read_csv(    '/mnt/ivy/thliao/project/coral_ruegeria/nanopore_processing/annotations/KEGG_anno_Revised.tsv', sep='\t', index_col=0)
-
-
 # genome_pos = pd.read_csv('/mnt/ivy/thliao/project/coral_ruegeria/nanopore_processing/76genomes_pos.tsv',sep='\t',index_col=0)
 # genome_pos.loc[:,'is pseudo'] = ['Yes' if ':' in str(_) else 'No' for _ in genome_pos['pseudogenized']]
 # genome_pos.loc[:,'genome'] = [_.split('_')[0] for _ in genome_pos['contig']]
@@ -264,38 +263,56 @@ gid2ipr = {f.split('/')[-2].split('.')[0]:f
 
 
 ###### main ######
-if multiple_input:
-    kegg_df = pd.read_csv(kegg_output, sep='\t', index_col=0)
-    genome_pos  = pd.read_csv(genome_pos_file,sep='\t',index_col=0)
-else:
-    sub_kegg_df = pd.read_csv(kegg_output, sep='\t', index_col=0)
-    genome_pos  = pd.read_csv(genome_pos_file,sep='\t',index_col=0)
-    ## todo: turn a single one into a dataframe
-    
-    
-locus2contig = genome_pos['contig'].to_dict()
-locus_is_pseudo = set(list(genome_pos.index[genome_pos['pseudogenized'].str.contains(':')]))
-    
-locus2ko = {locus: ko
-            for ko, _d in kegg_df.to_dict().items()
-            for genome, locus_list in _d.items()
-            for locus in str(locus_list).split(',')}
+def main(odir,):
+    gid = 'L1'
+    kegg_output = f'{odir}/KOFAMSCAN/{gid}.kofamout'
+    ipr_output = f'{odir}/ipr/{gid}/{gid}.faa.tsv'
+    genome_pos = f'{odir}/ipr/{gid}/{gid}.faa.tsv'
 
-ko2ipr, ko2others, locus2other_analysis2ID = fromKOtoIPR(kegg_df,gid2ipr)
-ko2gid2status_df,gid2ko2pseudo_l,confident_presence = refining_KOmatrix(kegg_df,locus_is_pseudo,locus2other_analysis2ID,locus2ko,verbose=1)
-pseudo2assess_result = assess_confident_pseudo_multi(gid2ko2pseudo_l,confident_presence,len_threshold=0.6)
+    if multiple_input:
+        kegg_df = pd.read_csv(kegg_output, sep='\t', index_col=0)
+        genome_pos  = pd.read_csv(genome_pos_file,sep='\t',index_col=0)
+    else:
+        sub_kegg_df = pd.read_csv(kegg_output, sep='\t', index_col=0)
+        genome_pos  = pd.read_csv(genome_pos_file,sep='\t',index_col=0)
+        ## todo: turn a single one into a dataframe
+    locus2contig = genome_pos['contig'].to_dict()
+    locus_is_pseudo = set(list(genome_pos.index[genome_pos['pseudogenized'].str.contains(':')]))
+        
+    locus2ko = {locus: ko
+                for ko, _d in kegg_df.to_dict().items()
+                for genome, locus_list in _d.items()
+                for locus in str(locus_list).split(',')}
 
-copy_df = ko2gid2status_df.copy()
-for locus,(_,ko,_,_) in pseudo2assess_result.items():
-    gid = locus.split('_')[0]
-    ori = copy_df.loc[ko,gid]
-    if ori == 'RE(no intact)':
-        copy_df.loc[ko,gid] = 'confident pseudo'
-bin_df = copy_df.applymap(lambda x:v2values[x])
+    ko2ipr, ko2others, locus2other_analysis2ID = fromKOtoIPR(kegg_df,gid2ipr)
+    ko2gid2status_df,gid2ko2pseudo_l,confident_presence = refining_KOmatrix(kegg_df,locus_is_pseudo,locus2other_analysis2ID,locus2ko,verbose=1)
+    pseudo2assess_result = assess_confident_pseudo_multi(gid2ko2pseudo_l,confident_presence,len_threshold=0.6)
 
-output_file(refined_ko_infodf,copy_df)
-output_file(refined_ko_bindf,bin_df)
+    copy_df = ko2gid2status_df.copy()
+    for locus,(_,ko,_,_) in pseudo2assess_result.items():
+        gid = locus.split('_')[0]
+        ori = copy_df.loc[ko,gid]
+        if ori == 'RE(no intact)':
+            copy_df.loc[ko,gid] = 'confident pseudo'
+    bin_df = copy_df.applymap(lambda x:v2values[x])
 
+    output_file(refined_ko_infodf,copy_df)
+    output_file(refined_ko_bindf,bin_df)
+
+
+# parse args
+@click.command()
+@click.option('-fi',"--file_input",type = str, nargs = 2 ,required = True, prompt = "Enter the input file name", help = "Please input faa or gbk file you want to analyze")
+@click.option('-o',"--folder_output",type = str, nargs = 1 ,required = True, prompt = "Enter the output folder name", help = "Please input path of folder you want to analyze")
+@click.option("-d","dry_run",help="Generate command only.",default=False,required=False,is_flag=True,)
+def cli(file_input,folder_output,dry_run):
+    in_files,odir,temp_dir = processing_IO(file_input,realpath(folder_output))
+    run_annotate(in_files,odir,temp_dir,dry_run)
+
+
+######### RUN
+if __name__ == '__main__':
+    cli()
 
 
 
