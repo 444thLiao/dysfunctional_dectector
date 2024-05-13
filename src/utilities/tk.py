@@ -16,7 +16,21 @@ def check(ofile,cmd,name,dry_run=False,LOGGER=logging.getLogger('dysfunction_log
         LOGGER.debug(f" '{cmd}' would not run.")
     return executed_cmd
         
-        
+
+def parse_gbk(gbk_file):
+    info = {}
+    records = list(SeqIO.parse(gbk_file, 'genbank'))
+    for contig in records:
+        all_fea = [_ for _ in contig.features if 'locus_tag' in _.qualifiers]
+        for fea in all_fea:
+            locus_tag = fea.qualifiers['locus_tag'][0]
+            start = fea.location.start.real
+            end = fea.location.end.real
+            strand = fea.location.strand
+            contig_name = contig.id
+            info[locus_tag] = [contig_name, start, end, strand]
+    return info
+
 def batch_iter(iter, batch_size):
     # generating batch according batch_size
     iter = list(iter)
