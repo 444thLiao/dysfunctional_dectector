@@ -1,6 +1,7 @@
 from os.path import exists,dirname
 import os
 import logging
+from Bio import SeqIO
 
 def check(ofile,cmd,name,dry_run=False,LOGGER=logging.getLogger('dysfunction_logger')):
     executed_cmd=[]
