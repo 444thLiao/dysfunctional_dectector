@@ -3,9 +3,7 @@ KEGG, ipr, pseudofinder annotations
 1.
 2.
 todo:
-1. make it accept and run multiple inputs
-2. check gbk and infaa format and their consistence
-3. enable logging
+
 """
 from os.path import *
 from dysfunctional_dectector.src.utilities.tk import check,parse_gbk

@@ -13,32 +13,28 @@ todo:
 
 
 
-from subprocess import check_call
 from glob import glob
 import pandas as pd
 from tqdm import tqdm
 from collections import defaultdict
-from Bio import SeqIO
-from Bio.KEGG import REST
-from Bio.KEGG.KGML import KGML_parser
-from Bio.Graphics.KGML_vis import KGMLCanvas
 import pandas as pd
-import numpy as np
-import click
 from os.path import exists
-from dysfunctional_dectector.src.utilities.tk import output_file
-## dynamic input
-multiple_input = True  # a switch: then the kegg_output should be a file referred to a dataframe
-kegg_output = ''
-genome_pos_file = '' # from gbk
-pseudogenes_output = ''
-ipr_output_file = ''
+import os
+import click
+from dysfunctional_dectector.src.utilities.tk import output_file 
+import logging
+logger = logging.getLogger('dysfunction_logger')
+logger.setLevel(logging.DEBUG)
+hd = logging.FileHandler('debuglog.log')
+hd.setLevel(logging.DEBUG)
+cons = logging.StreamHandler()
+cons.setLevel(logging.DEBUG)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+hd.setFormatter(formatter)
+cons.setFormatter(formatter)
+logger.addHandler(hd)
+logger.addHandler(cons)
 
-
-# prepare a file look like this
-
-# Genome ID\tkegg output file\t ipr output file\t gbk file\t pseudogene output file
-# 
 
 ## static setting
 headers = ['Protein accession',
@@ -56,15 +52,18 @@ headers = ['Protein accession',
  'InterPro annotations',
  'GO annotations',
  'Pathways annotations']
-all_kos = []
 
-## OUTPUT 
-refined_ko_bindf = ''
-refined_ko_infodf = ''
+v2values = {'intact':1, 
+            'no KEGG-annotated':0, 
+            'confident pseudo':0.2,
+            'RE(intact)':0.5, 
+            'RE(not intact)':0.5,
+            'not intact':0.5
+            }
 
+KOFAMSCAN_ko_list = '/mnt/home-db/pub/protein_db/kegg/v20230301/ko_list'
+all_kos = [_.split('\t')[0] for _ in open(KOFAMSCAN_ko_list).readlines()[1:]]
 
-
-    
 def refining_KOmatrix(kegg_df,
                       locus_is_pseudo,
                       locus2other_analysis2ID,
@@ -85,6 +84,7 @@ def refining_KOmatrix(kegg_df,
             for gid in kegg_df.index:
                 gid2cases[gid][ko] = 'no KEGG-annotated'
                 continue
+            continue
         ## For ko in kegg_df, search it for each gid.
         ## first step of filtering
         gid2locus_str = kegg_df[ko].to_dict()
@@ -104,7 +104,7 @@ def refining_KOmatrix(kegg_df,
             ko2intact_l[ko].extend(intact_l)
             confident_presence[gid][ko] = intact_l
             if all([_ in locus_is_pseudo for _ in all_l]):
-                cases = 'no intact'
+                cases = 'not intact'
                 gid2ko2pseudo_l[gid][ko] = [_  for _ in all_l
                                             if _  in pseudo_l]
             else:
@@ -149,7 +149,7 @@ def refining_KOmatrix(kegg_df,
             if len(found_l)==0:
                 continue
             if all([_ in locus_is_pseudo for _ in found_l]):
-                cases = 'no intact'
+                cases = 'not intact'
                 gid2ko2pseudo_l[gid][ko].extend(found_l)
             else:
                 cases = 'intact'
@@ -179,8 +179,15 @@ def is_confident_pseudo(this_locus,thresholds,genome_pos):
     else:
         return False,len_of_upstream
 
+
+
 def assess_confident_pseudo_multi(gid2ko2pseudo_l,confident_presence,
+                                  locus_is_pseudo,genome_pos,
                                   len_threshold=0.6):
+    """
+    Need results from multiple genomes to assess the confidence of pseudogenes.
+
+    """
     ko2pseudo_l = defaultdict(list)
     ko2intact_l = defaultdict(list)
     # re_ko2intact_l = defaultdict(list)
@@ -198,6 +205,8 @@ def assess_confident_pseudo_multi(gid2ko2pseudo_l,confident_presence,
     for ko, locus_l in tqdm(ko2pseudo_l.items()):
         candidate_l = ko2intact_l[ko]
         if len(candidate_l)==0:
+            for locus in locus_l:
+                pseudo2assess_result[locus] = ('likely pseudo',ko,(0,0),0)
             continue
         lens = []
         for l in candidate_l:
@@ -216,98 +225,112 @@ def assess_confident_pseudo_multi(gid2ko2pseudo_l,confident_presence,
     return pseudo2assess_result
 
 
-def fromKOtoIPR(kegg_df,gid2ipr):
+def fromKOtoIPR(kegg_df,ipr_df,gid):
     # read KO and find it ipr-based signature
     locus2other_analysis2ID = defaultdict(dict)
     ko2others = defaultdict(dict)
     ko2ipr = {}
-    for gid, ofile in tqdm(gid2ipr.items(),total=len(gid2ipr)):
-        ko2locus = {k:v for k,v in kegg_df.loc[gid,:].to_dict().items() if str(v)!='nan' and k not in ko2ipr}
-        locus2ko = {}
-        for ko,l in ko2locus.items():
-            for _ in l.split(','):
-                locus2ko[_] = ko
-        ipr_df = pd.read_csv(ofile,
-                             sep='\t',index_col=None,low_memory=False,names=headers)
+
+    ko2locus = {k:v 
+                for k,v in kegg_df.loc[gid,:].to_dict().items() 
+                if str(v)!='nan' and k not in ko2ipr}
+    locus2ko = {}
+    for ko,l in ko2locus.items():
+        for _ in l.split(','):
+            locus2ko[_] = ko
+    if 'Sequence MD5 digest' in ipr_df.columns:
         ipr_df.pop('Sequence MD5 digest')
-        # ipr_df.pop('Pathways annotations)
-        subdf = ipr_df.loc[ipr_df['Protein accession'].isin(locus2ko),:]
-        for i,row in subdf.iterrows():
-            l = row['Protein accession']
-            locus2other_analysis2ID[l][row['Analysis']] = row['Signature accession']
-            ko = locus2ko[l]
-            if ko in ko2ipr:
-                continue
-            if row['InterPro accession'] != '-':
-                ko2ipr[ko] = row['InterPro accession']
-            else:
-                ko2others[ko][row['Analysis']] = row['Signature accession']
+    subdf = ipr_df.loc[ipr_df['Protein accession'].isin(locus2ko),:]
+    for i,row in subdf.iterrows():
+        l = row['Protein accession']
+        locus2other_analysis2ID[l][row['Analysis']] = row['Signature accession']
+        ko = locus2ko[l]
+        if ko in ko2ipr:
+            continue
+        if row['InterPro accession'] != '-':
+            ko2ipr[ko] = row['InterPro accession']
+        else:
+            ko2others[ko][row['Analysis']] = row['Signature accession']
     return ko2ipr, ko2others, locus2other_analysis2ID
 
-v2values = {'intact':1, 
-            'no KEGG-annotated':0, 
-            'confident pseudo':0.2,
-            'RE(intact)':0.5, 
-            'RE(no intact)':0.5,
-            'no intact':0.5
-            }
-
-####### better to add another one together with the one waitting to be refined
-gid2ipr = {f.split('/')[-2].split('.')[0]:f
-           for f in glob('/mnt/ivy/thliao/project/coral_ruegeria/nanopore_processing/annotations/ipr/*.anno/*.faa.tsv')}
-# kegg_df = pd.read_csv(    '/mnt/ivy/thliao/project/coral_ruegeria/nanopore_processing/annotations/KEGG_anno_Revised.tsv', sep='\t', index_col=0)
-# genome_pos = pd.read_csv('/mnt/ivy/thliao/project/coral_ruegeria/nanopore_processing/76genomes_pos.tsv',sep='\t',index_col=0)
-# genome_pos.loc[:,'is pseudo'] = ['Yes' if ':' in str(_) else 'No' for _ in genome_pos['pseudogenized']]
-# genome_pos.loc[:,'genome'] = [_.split('_')[0] for _ in genome_pos['contig']]
 
 
+def parse_kofamout(inf):
+    l2ko = {}
+    for row in open(inf).read().strip().split('\n'):
+        rows = row.split('\t')
+        l2ko[rows[0]] = ';'.join(sorted(rows[1:]))
+    return l2ko
 
-###### main ######
-def main(odir,):
-    gid = 'L1'
-    kegg_output = f'{odir}/KOFAMSCAN/{gid}.kofamout'
-    ipr_output = f'{odir}/ipr/{gid}/{gid}.faa.tsv'
-    genome_pos = f'{odir}/ipr/{gid}/{gid}.faa.tsv'
+def main(indir,odir,gid):
+    # input
+    kofamout = f'{indir}/KOFAMSCAN/{gid}.kofamout'
+    kofamout_tab = kofamout.replace('.kofamout','_anno.tab')
+    ipr_output = f'{indir}/ipr/{gid}/{gid}.faa.tsv'
+    genome_pos_file = f'{indir}/pos/{gid}_pos.tsv'
+    # output
+    os.makedirs(odir,exist_ok=True)
+    refined_ko_infodf = f'{odir}/{gid}_refined_ko_info.tsv'
+    refined_ko_bindf = f'{odir}/{gid}_refined_ko_bin.tsv'
 
-    if multiple_input:
-        kegg_df = pd.read_csv(kegg_output, sep='\t', index_col=0)
-        genome_pos  = pd.read_csv(genome_pos_file,sep='\t',index_col=0)
+    if not exists(kofamout_tab):
+        l2ko = parse_kofamout(kofamout)
+        gid2kegg2locus_info = defaultdict(lambda :defaultdict(list))
+        for locus,ko_l in l2ko.items():
+            for ko in ko_l.split(';'):
+                gid2kegg2locus_info[gid][ko].append(locus)
+        gid2kegg2locus_info = {genome:{ko:','.join(list(set(l_list))) 
+                                    for ko,l_list in _d.items()} 
+                                    for genome,_d in gid2kegg2locus_info.items()}
+        kegg_df = pd.DataFrame.from_dict(gid2kegg2locus_info, orient='index')
+        kegg_df.to_csv(kofamout_tab,sep='\t',index=1)
     else:
-        sub_kegg_df = pd.read_csv(kegg_output, sep='\t', index_col=0)
-        genome_pos  = pd.read_csv(genome_pos_file,sep='\t',index_col=0)
-        ## todo: turn a single one into a dataframe
-    locus2contig = genome_pos['contig'].to_dict()
+        kegg_df = pd.read_csv(kofamout_tab,sep='\t',index_col=0)
+    ipr_df = pd.read_csv(ipr_output,sep='\t',index_col=None,low_memory=False,names=headers)
+    if kegg_df.shape[1] == 1:
+        logger.debug("Refining annotation using genome itself only, it will not be able to distinguish confident/likely pseudogenes.")
+    genome_pos  = pd.read_csv(genome_pos_file,sep='\t',index_col=0)
     locus_is_pseudo = set(list(genome_pos.index[genome_pos['pseudogenized'].str.contains(':')]))
-        
+
     locus2ko = {locus: ko
                 for ko, _d in kegg_df.to_dict().items()
                 for genome, locus_list in _d.items()
                 for locus in str(locus_list).split(',')}
 
-    ko2ipr, ko2others, locus2other_analysis2ID = fromKOtoIPR(kegg_df,gid2ipr)
+    ko2ipr, ko2others, locus2other_analysis2ID = fromKOtoIPR(kegg_df,ipr_df,gid)
+    
     ko2gid2status_df,gid2ko2pseudo_l,confident_presence = refining_KOmatrix(kegg_df,locus_is_pseudo,locus2other_analysis2ID,locus2ko,verbose=1)
-    pseudo2assess_result = assess_confident_pseudo_multi(gid2ko2pseudo_l,confident_presence,len_threshold=0.6)
+
+    pseudo2assess_result = assess_confident_pseudo_multi(gid2ko2pseudo_l,confident_presence,locus_is_pseudo,genome_pos,len_threshold=0.6)
 
     copy_df = ko2gid2status_df.copy()
     for locus,(_,ko,_,_) in pseudo2assess_result.items():
-        gid = locus.split('_')[0]
         ori = copy_df.loc[ko,gid]
-        if ori == 'RE(no intact)':
+        if ori == 'RE(not intact)':
             copy_df.loc[ko,gid] = 'confident pseudo'
     bin_df = copy_df.applymap(lambda x:v2values[x])
 
     output_file(refined_ko_infodf,copy_df)
     output_file(refined_ko_bindf,bin_df)
-
+    logger.debug("Done refining the annotation.")
 
 # parse args
-@click.command()
-@click.option('-fi',"--file_input",type = str, nargs = 2 ,required = True, prompt = "Enter the input file name", help = "Please input faa or gbk file you want to analyze")
-@click.option('-o',"--folder_output",type = str, nargs = 1 ,required = True, prompt = "Enter the output folder name", help = "Please input path of folder you want to analyze")
-@click.option("-d","dry_run",help="Generate command only.",default=False,required=False,is_flag=True,)
-def cli(file_input,folder_output,dry_run):
-    in_files,odir,temp_dir = processing_IO(file_input,realpath(folder_output))
-    run_annotate(in_files,odir,temp_dir,dry_run)
+@click.group()
+@click.option('--odir','-o',help="output directory")
+@click.pass_context
+def cli(ctx,odir):
+    ctx.ensure_object(dict)
+    ctx.obj['odir'] = odir
+
+@cli.command()
+@click.option('--genome','-gid',help="Genome ID")
+@click.option('--indir','-i',help="Input directory which is also a output directory of s1.")
+@click.pass_context
+def workflow(ctx,genome,indir):
+    outputdir = ctx.obj['odir']
+    indir = indir
+    genome = genome
+    main(indir,outputdir,genome)
 
 
 ######### RUN
