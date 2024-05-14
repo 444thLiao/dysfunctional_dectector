@@ -207,7 +207,7 @@ def run_annotate(in_files,odir,temp_dir,dry_run=False):
         logger.debug("Try to parse pseudofinder result and merged some splitted pseudogenes.")
         odir = dirname(pseudofinder_finalname)
         cmd1 = f"python {mergedpseudo_script} -i {pseudofinder_finalname} -o {odir} step1 "
-        cmd2 = f"python {mergedpseudo_script} -i {pseudofinder_finalname} -o {odir} -gp {ingbk} step2 "
+        cmd2 = f"python {mergedpseudo_script} -i {pseudofinder_finalname} -o {odir} step2 -gp {ingbk}"
         cmd3 = f"python {mergedpseudo_script} -i {pseudofinder_finalname} -o {odir} step3 "
         cmd4 = f"python {mergedpseudo_script} -i {pseudofinder_finalname} -o {odir} merge "
         cmd = ';'.join([cmd1,cmd2,cmd3,cmd4])
