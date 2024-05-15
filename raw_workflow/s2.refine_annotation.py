@@ -14,23 +14,12 @@ import pandas as pd
 from tqdm import tqdm
 from collections import defaultdict
 import pandas as pd
-from os.path import exists
+from os.path import exists,realpath
 import os
 import click
 from dysfunctional_dectector.src.utilities.tk import output_file,kegg_api
 from dysfunctional_dectector.bin.refine_ko_with_ref import prepare_abbrev2files
-import logging
-logger = logging.getLogger('dysfunction_logger')
-logger.setLevel(logging.DEBUG)
-hd = logging.FileHandler('debuglog.log')
-hd.setLevel(logging.DEBUG)
-cons = logging.StreamHandler()
-cons.setLevel(logging.DEBUG)
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-hd.setFormatter(formatter)
-cons.setFormatter(formatter)
-logger.addHandler(hd)
-logger.addHandler(cons)
+from dysfunctional_dectector.src.utilities.logging import *
 
 
 ## static setting
@@ -109,7 +98,7 @@ def refining_KOmatrix(kegg_df,
                 gid2ko2intact_l[gid][ko] = [_  for _ in all_l
                                             if _ not in pseudo_l]
             gid2cases[gid][ko] = cases
-    
+    logger.debug(f"Start use Interproscan annotations to refine kegg anntoations...")
     ko2gid2status_df = pd.DataFrame.from_dict(gid2cases)
     if verbose:
         ko2row = tqdm(ko2gid2status_df.iterrows(),
@@ -195,7 +184,8 @@ def assess_confident_pseudo_multi(gid2ko2pseudo_l,confident_presence,
     for gid,_d in confident_presence.items():
         for ko,l in _d.items():
             ko2intact_l[ko].extend(l)
-            
+    
+    logger.debug(f"Start assessing identified pseudogenes ...")
     pseudo2assess_result = {}
     for ko, locus_l in tqdm(ko2pseudo_l.items()):
         candidate_l = ko2intact_l[ko]
@@ -329,7 +319,9 @@ def main(indir,odir,gid,accessory_name=None):
     output_file(refined_ko_infodf,copy_df)
     output_file(refined_ko_bindf,bin_df)
     logger.debug("Done refining the annotation.")
-
+    logger.debug(f"{gid} result has been output to {realpath(refined_ko_bindf)}")
+    
+    
 # parse args
 @click.group()
 @click.option('--odir','-o',help="output directory")
@@ -341,13 +333,13 @@ def cli(ctx,odir):
 @cli.command()
 @click.option('--genome','-gid',help="Genome ID")
 @click.option('--indir','-i',help="Input directory which is also a output directory of s1.")
-@click.option('--addbytext','-add',help="Input a name for searching  accessory genomes and use them to correct the genome you want to annotated.")
+@click.option('--addbytext','-add',help="Input a name for searching  accessory genomes and use them to correct the genome you want to annotated.",required=False,default=False)
 @click.pass_context
-def workflow(ctx,genome,indir,add_by_text):
+def workflow(ctx,genome,indir,addbytext):
     outputdir = ctx.obj['odir']
     indir = indir
     genome = genome
-    accessory_name = add_by_text
+    accessory_name = addbytext
     main(indir,outputdir,genome,accessory_name)
 
 

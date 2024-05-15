@@ -11,9 +11,13 @@ list of genes/locus/modules needed to be visualized
 """
 
 import pandas as pd
-from os.path import join,dirname
+from os.path import join,dirname,realpath
 import pickle,click,os
+from tqdm import tqdm
 from collections import defaultdict
+from dysfunctional_dectector.src.utilities.logging import *
+
+
 ko2ec_file = '/mnt/home-db/pub/protein_db/kegg/v20230301/link/ko2ec'
 ko2pathway_file = '/home-user/thliao/db/protein_db/kegg/v20230301/link/ko2pathway'
 ko2module_file = '/home-user/thliao/db/protein_db/kegg/v20230301/link/ko2module'
@@ -41,7 +45,7 @@ def load_pickle(dictionary_location):
     return dictionary
 
 def read_module2ko():
-    data_folder = join(dirname(__file__),'data')
+    data_folder = join(dirname(dirname(realpath(__file__))),'data')
     # Import all modules from dictionaries
     regular_modules = load_pickle(join(data_folder,"01.KEGG_Regular_Module_Information.pickle"))
     bifurcation_modules = load_pickle(join(data_folder,"02.KEGG_Bifurcating_Module_Information.pickle"))
@@ -52,19 +56,24 @@ def read_module2ko():
 def main(indir,odir,gid,with_unannotated=False):
     refined_ko_infodf_path = f'{indir}/{gid}_refined_ko_info.tsv'
     ko_infodf = pd.read_csv(refined_ko_infodf_path,sep='\t',index_col=0)
+    refined_ko_bindf_path = f'{indir}/{gid}_refined_ko_bin.tsv'
+    ko_bindf = pd.read_csv(refined_ko_infodf_path,sep='\t',index_col=0)    
     subko_df = ko_infodf.loc[ko_infodf[gid]!='no KEGG-annotated',:]
 
     regular_modules,bifurcation_modules,structural_modules = read_module2ko()
 
     mentioned_kos = list(subko_df.index)
-    related_modules = list(set([m for ko in mentioned_kos for m in ko2module.get(ko,'').split(';')]))
-    
+    related_modules = list(set([m for ko in mentioned_kos for m in ko2module.get(ko,'').split(';') if m]))
+    logger.debug(f"Identified {len(related_modules)} modules in {gid} annotations...")
+    logger.debug(f"Ouputing module pattern into {odir}/module_tables/")
     os.makedirs(odir,exist_ok=True)
     os.makedirs(f"{odir}/module_tables/",exist_ok=True)
     module2info = defaultdict(dict)
-    for m in related_modules:
+    for m in tqdm(related_modules):
         module_name = m2name[m]
         module2info[m]['Name'] = module_name
+        if m not in regular_modules:
+            continue
         steps_ko = regular_modules[m]
         ko2step = {}
         ordered_kos = []
@@ -78,10 +87,15 @@ def main(indir,odir,gid,with_unannotated=False):
                 ko2step[k] = step_name
         module_ko_df = ko_infodf.T.reindex(columns=ordered_kos)
         module_ko_df.loc['STEP INFO',:] = [ko2step[_] for _ in ordered_kos]
+        
         module2info[m]['Pattern'] = module_ko_df
 
-        dfout = f"{odir}/module_tables/{m}.tsv"
+        dfout = f"{odir}/module_tables/{m}_info.tsv"
         module_ko_df.to_csv(dfout,sep='\t',index=1)
+        module_ko_df = ko_bindf.T.reindex(columns=ordered_kos)
+        module_ko_df.loc['STEP INFO',:] = [ko2step[_] for _ in ordered_kos]        
+        dfout = f"{odir}/module_tables/{m}_val.tsv"
+        module_ko_df.to_csv(dfout,sep='\t',index=1)        
 
 
 # parse args
@@ -90,7 +104,7 @@ def main(indir,odir,gid,with_unannotated=False):
 @click.pass_context
 def cli(ctx,odir):
     ctx.ensure_object(dict)
-    ctx.obj['odir'] = odir
+    ctx.obj['odir'] = realpath(odir)
 
 @cli.command()
 @click.option('--genome','-gid',help="Genome ID")
@@ -98,7 +112,7 @@ def cli(ctx,odir):
 @click.pass_context
 def workflow(ctx,genome,indir):
     outputdir = ctx.obj['odir']
-    indir = indir
+    indir = realpath(indir)
     genome = genome
     main(indir,outputdir,genome)
 
