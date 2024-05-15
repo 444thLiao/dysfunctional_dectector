@@ -86,15 +86,12 @@ def main(kegg_df,gid2info,ofile,outdir,strict_mode):
             for locus in locuslist_str.split(','):
                 _l2ko[locus] = ko
         ref_p,abbrev_locus2ko = prepare_abbrev2files(abbrev,outdir)
-
         refined_count = 0
         cmd = f"blastp -query {ref_p} -db {outdir}/{gid} -outfmt 6 -qcov_hsp_perc 90 -evalue 1e-3 -out {outdir}/{gid}_{abbrev}.tab"
         print(f"perform Blastp {gid} vs {abbrev}")
         check_call([cmd],shell=1)
-
         # parse blastp table
         gid2abbrev_df = pd.read_csv(f'{outdir}/{gid}_{abbrev}.tab',sep='\t',header=None)
-        
         l2l = {}
         for _,row in gid2abbrev_df.iterrows():
             if row[2]>=99:

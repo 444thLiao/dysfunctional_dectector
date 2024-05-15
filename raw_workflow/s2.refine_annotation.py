@@ -9,10 +9,6 @@ todo:
 
 
 """
-
-
-
-
 from glob import glob
 import pandas as pd
 from tqdm import tqdm
@@ -21,7 +17,8 @@ import pandas as pd
 from os.path import exists
 import os
 import click
-from dysfunctional_dectector.src.utilities.tk import output_file 
+from dysfunctional_dectector.src.utilities.tk import output_file,kegg_api
+from dysfunctional_dectector.bin.refine_ko_with_ref import prepare_abbrev2files
 import logging
 logger = logging.getLogger('dysfunction_logger')
 logger.setLevel(logging.DEBUG)
@@ -179,8 +176,6 @@ def is_confident_pseudo(this_locus,thresholds,genome_pos):
     else:
         return False,len_of_upstream
 
-
-
 def assess_confident_pseudo_multi(gid2ko2pseudo_l,confident_presence,
                                   locus_is_pseudo,genome_pos,
                                   len_threshold=0.6):
@@ -224,7 +219,6 @@ def assess_confident_pseudo_multi(gid2ko2pseudo_l,confident_presence,
                 pseudo2assess_result[locus] = ('likely pseudo',ko,(low_thres,max_thres),ll)
     return pseudo2assess_result
 
-
 def fromKOtoIPR(kegg_df,ipr_df,gid):
     # read KO and find it ipr-based signature
     locus2other_analysis2ID = defaultdict(dict)
@@ -253,8 +247,6 @@ def fromKOtoIPR(kegg_df,ipr_df,gid):
             ko2others[ko][row['Analysis']] = row['Signature accession']
     return ko2ipr, ko2others, locus2other_analysis2ID
 
-
-
 def parse_kofamout(inf):
     l2ko = {}
     for row in open(inf).read().strip().split('\n'):
@@ -262,7 +254,18 @@ def parse_kofamout(inf):
         l2ko[rows[0]] = ';'.join(sorted(rows[1:]))
     return l2ko
 
-def main(indir,odir,gid):
+def get_name(name):
+    names = kegg_api.lookfor_organism("ruegeria")
+    logger.debug(f"Use [{name}] to search against KEGG GENOME database...")
+    logger.debug(f"Found {len(names)} items...")
+    logger.debug(f"Use the following genomes(top5 at most) as accessory genomes: ")
+    logger.debug('\n'.join(names))
+
+    abbrev2name = {n.split(' ')[1]:n[0].split(' ',2)[-1].rsplit(' ',1)[0] 
+                   for n in names[:5]}
+    return abbrev2name
+
+def main(indir,odir,gid,accessory_name=None):
     # input
     kofamout = f'{indir}/KOFAMSCAN/{gid}.kofamout'
     kofamout_tab = kofamout.replace('.kofamout','_anno.tab')
@@ -286,9 +289,13 @@ def main(indir,odir,gid):
         kegg_df.to_csv(kofamout_tab,sep='\t',index=1)
     else:
         kegg_df = pd.read_csv(kofamout_tab,sep='\t',index_col=0)
+
+
+
     ipr_df = pd.read_csv(ipr_output,sep='\t',index_col=None,low_memory=False,names=headers)
     if kegg_df.shape[1] == 1:
         logger.debug("Refining annotation using genome itself only, it will not be able to distinguish confident/likely pseudogenes.")
+
     genome_pos  = pd.read_csv(genome_pos_file,sep='\t',index_col=0)
     locus_is_pseudo = set(list(genome_pos.index[genome_pos['pseudogenized'].str.contains(':')]))
 
@@ -296,7 +303,6 @@ def main(indir,odir,gid):
                 for ko, _d in kegg_df.to_dict().items()
                 for genome, locus_list in _d.items()
                 for locus in str(locus_list).split(',')}
-
     ko2ipr, ko2others, locus2other_analysis2ID = fromKOtoIPR(kegg_df,ipr_df,gid)
     
     ko2gid2status_df,gid2ko2pseudo_l,confident_presence = refining_KOmatrix(kegg_df,locus_is_pseudo,locus2other_analysis2ID,locus2ko,verbose=1)
@@ -309,6 +315,16 @@ def main(indir,odir,gid):
         if ori == 'RE(not intact)':
             copy_df.loc[ko,gid] = 'confident pseudo'
     bin_df = copy_df.applymap(lambda x:v2values[x])
+
+
+    # if accessory_name is not None:
+    #     abbrev2name = get_name(accessory_name)
+    #     for abbrev,gname in abbrev2name.items():
+    #         ref_p,locus2ko = prepare_abbrev2files(abbrev,
+    #                                               odir+'/accessory/')
+    #         for locus,ko in locus2ko.items():
+    #             bin_df.loc[ko,gname] = 1
+    #             copy_df.loc[ko,gid] = 'intact'
 
     output_file(refined_ko_infodf,copy_df)
     output_file(refined_ko_bindf,bin_df)
@@ -325,12 +341,14 @@ def cli(ctx,odir):
 @cli.command()
 @click.option('--genome','-gid',help="Genome ID")
 @click.option('--indir','-i',help="Input directory which is also a output directory of s1.")
+@click.option('--addbytext','-add',help="Input a name for searching  accessory genomes and use them to correct the genome you want to annotated.")
 @click.pass_context
-def workflow(ctx,genome,indir):
+def workflow(ctx,genome,indir,add_by_text):
     outputdir = ctx.obj['odir']
     indir = indir
     genome = genome
-    main(indir,outputdir,genome)
+    accessory_name = add_by_text
+    main(indir,outputdir,genome,accessory_name)
 
 
 ######### RUN

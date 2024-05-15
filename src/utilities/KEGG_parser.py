@@ -2,8 +2,7 @@ import re
 import pickle
 import ast
 from tqdm import tqdm
-from bioservices.kegg import KEGG
-kegg_api = KEGG()
+from dysfunctional_dectector.src.utilities.tk import kegg_api
 
 """ Script to download and parse KEGG information and store it in data """
 
@@ -137,13 +136,13 @@ def transform_module_dictionaries(bifurcating_data, structural_data, output_bifu
 # Execute parsing functions
 
 module_components_raw = download_kegg_modules()
-module_steps_parsed = parse_regular_module_dictionary("01.Bifurcating_List.txt", 
-                                "02.Structural_List.txt", module_components_raw)
-final_regular_dict = create_final_regular_dictionary(module_steps_parsed, module_components_raw, "05.Modules_Parsed.txt")
+module_steps_parsed = parse_regular_module_dictionary("./src/utilities/01.Bifurcating_List.txt", 
+                                "./src/utilities/02.Structural_List.txt", module_components_raw)
+final_regular_dict = create_final_regular_dictionary(module_steps_parsed, module_components_raw, "。./data/05.Modules_Parsed.txt")
 
 
-export_module_dictionary(final_regular_dict, "../01.KEGG_Regular_Module_Information.pickle")
-transform_module_dictionaries("03.Bifurcating_Modules.dict", 
-                              "04.Structural_Modules.dict", 
-                              "../02.KEGG_Bifurcating_Module_Information.pickle", 
-                              "../03.KEGG_Structural_Module_Information.pickle")
+export_module_dictionary(final_regular_dict, "./data/01.KEGG_Regular_Module_Information.pickle")
+# transform_module_dictionaries("./data/03.Bifurcating_Modules.dict", 
+#                               "./data/04.Structural_Modules.dict", 
+#                               "./data/02.KEGG_Bifurcating_Module_Information.pickle", 
+#                               "./data/03.KEGG_Structural_Module_Information.pickle")

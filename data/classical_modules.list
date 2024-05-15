@@ -1,0 +1,65 @@
+M00001	Glycolisis	Carbohydrate metabolism
+M00003	Gluconeogensis	Carbohydrate metabolism
+M00004	PPP (Full)	Carbohydrate metabolism
+M00006	PPP (oxidative)	Carbohydrate metabolism
+M00007	PPP (non-oxidative)	Carbohydrate metabolism
+M00307	Pyruvate oxidation	Carbohydrate metabolism
+M00009	TCA cycle	Carbohydrate metabolism
+M00008	Entner-Doudoroff	Carbohydrate metabolism
+M00597	AII	carbon fixation
+M00598	AI	carbon fixation
+M00165	purple	carbon fixation
+M00376	green nonS	carbon fixation
+M00173	green S	carbon fixation
+M00144	NADH dehydrogenase	Oxidative phosphorylation
+M00145	NAD(P)H dehydrogenase	Oxidative phosphorylation
+M00149	Succinate dehydrogenase	Oxidative phosphorylation
+M00417	Cyt. bo3	Oxidative phosphorylation
+M00153	Cyt. bd	Oxidative phosphorylation
+M00416	Cyt. c oxidase (aa3)	Oxidative phosphorylation
+M00156	Cyt. c oxidase (cbb3)	Oxidative phosphorylation
+M00157	ATP synthase (F-type)	Oxidative phosphorylation
+M00159	ATP synthase (V-type)	Oxidative phosphorylation
+M00123	Biotin	Cofactors
+M00126	Folate/THF	Cofactors
+M00881	Lipoic acid	Cofactors
+M00622	NMN	Cofactors
+M00115	NAD+	Cofactors
+M00119	Pantothenate	Cofactors
+M00120	CoA	Cofactors
+M00124	Pyridoxine (B6)	Cofactors
+M00127	Thiamine	Cofactors
+M00125	Riboflavin	Cofactors
+M00001	FAD	Cofactors
+M00001	Terpenoid backbone (MEP/DOXP pathway)	Cofactors
+M00117	Ubiquinone/ubiquinol	Cofactors
+M00121	Heme	Cofactors
+M00924	VB12 (anaerobic)	Cofactors
+M00925	VB12 (aerobic)	Cofactors
+M00844	L-Ala	Amino acids
+M00019	L-Val	Amino acids
+M00432	L-Leu	Amino acids
+M00570	L-Ile	Amino acids
+M00118	L-Glu	Amino acids
+M00844	L-Arg	Amino acids
+M00015	L-Pro	Amino acids
+M00026	L-His	Amino acids
+M00023	L-Trp	Amino acids
+M00040	L-Tyr	Amino acids
+M00024	L-Phe	Amino acids
+M00017	L-Met	Amino acids
+M00021	L-Cys	Amino acids
+M00020	L-Ser	Amino acids
+M00016	L-Lys	Amino acids
+M00013	beta-Ala	Amino acids
+M00060	LPS (lpxL-lpxM)	Cell wall
+M00063	LPS (CMP-KDO)	Cell wall
+M00055	Glycan	Cell wall
+M00048	Purine	Others biosynthesis
+M00082	Fatty acids	Others biosynthesis
+M00087	beta-Oxidation	Others biosynthesis
+M00091	PC biosynthesis	Others biosynthesis
+M00093	PE biosynthesis	Others biosynthesis
+M00107	Steroid hormone	Others biosynthesis
+M00627	beta-Lactam	Drug resistance
+M00726	Cationic antimicrobial peptide (CAMP)	Drug resistance
