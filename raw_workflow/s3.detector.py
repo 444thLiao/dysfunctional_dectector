@@ -57,7 +57,7 @@ def main(indir,odir,gid,with_unannotated=False):
     refined_ko_infodf_path = f'{indir}/{gid}_refined_ko_info.tsv'
     ko_infodf = pd.read_csv(refined_ko_infodf_path,sep='\t',index_col=0)
     refined_ko_bindf_path = f'{indir}/{gid}_refined_ko_bin.tsv'
-    ko_bindf = pd.read_csv(refined_ko_infodf_path,sep='\t',index_col=0)    
+    ko_bindf = pd.read_csv(refined_ko_bindf_path,sep='\t',index_col=0)    
     subko_df = ko_infodf.loc[ko_infodf[gid]!='no KEGG-annotated',:]
 
     regular_modules,bifurcation_modules,structural_modules = read_module2ko()
