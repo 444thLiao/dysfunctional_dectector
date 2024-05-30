@@ -130,3 +130,21 @@ def ko2gename(ko_list):
         gename = row_info[start_index:end_index].strip().split(";", 1)[0]
         ko2name[ko_num]=gename
     return ko2name
+
+###This function receives the dictionary like those from the get_input_info in the main.py
+def get_g2n(input_data):
+    g2n={}
+    for key,value in input_data:
+        gbk_name = os.path.basename(value)
+        gid = gbk_name.split(".")[0]
+        records = SeqIO.parse(value, "genbank")
+        for record in records:
+            if "organism" in record.annotations:
+                name = record.annotations["organism"]
+            else:
+                for feature in record.features:
+                    if feature.type == "source":
+                       name = feature.qualifiers.get("organism")[0]
+        g2n[gid]=name
+    return g2n
+
