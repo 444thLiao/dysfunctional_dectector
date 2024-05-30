@@ -137,7 +137,7 @@ def combine_result(s2_out,s3_out):
         info_dict.to_csv(f"{s3_out}/combination/{name}_combination.tsv",sep='\t',index=0)
 # parse args
 @click.command()
-@click.option('-i','--infile',help="An Metadata file as input. See example file in XXXX",required=False,default='')
+@click.option('--infile','-i',help="An Metadata file as input. See example file in XXXX",required=False,default=None)
 @click.option('-fi',"--file_input",type = str, nargs = 2 ,required = False, prompt = "Enter the input file name", help = "Please input faa and gbk file you want to analyze")
 @click.option('-o',"--folder_output",type = str, nargs = 1 ,required = True, prompt = "Enter the output folder name", help = "Please output path of folder you want to store the analysis results. ")
 @click.option("-d","--dry_run",help="Generate command only.",default=False,required=False,is_flag=True,)
