@@ -34,21 +34,19 @@ from dysfunctional_dectector.src.utilities.genome_download import get_search_res
 ###function definition
 def get_input_info(infile,fi):
     input_info = {}
-    if infile != "":
+    if infile is not None:
         df = pd.read_csv(infile, sep='\t')
         for index, row in df.iterrows():
             key = row[1] 
             value = row[2] 
             input_info[key] = value 
         return input_info
-    elif fi != "" and infile == "":
-        for file in fi:
-            if file.endswith(".faa"):
-                faa_file = file
-            else:
-                gbk_file = file
-            record = SeqIO.read(gbk_file,"genbank")
-            genome_id = record.id
+    elif type(fi)==tuple and infile == "":
+        #for faa_file,gbk_file in fi:
+        faa_file = [_ for _ in fi if _.endswith(".faa")][0]
+        gbk_file = [_ for _ in fi if not _.endswith(".faa")][0]
+        record = SeqIO.read(gbk_file,"genbank")
+        genome_id = record.id
         input_info[genome_id][faa_file] = gbk_file
         return input_info
     else:
@@ -138,7 +136,7 @@ def combine_result(s2_out,s3_out):
 # parse args
 @click.command()
 @click.option('--infile','-i',help="An Metadata file as input. See example file in XXXX",required=False,default=None)
-@click.option('-fi',"--file_input",type = str, nargs = 2 ,required = False, prompt = "Enter the input file name", help = "Please input faa and gbk file you want to analyze")
+@click.option('-fi',"--file_input",type = str, nargs = 2 ,required = False, prompt = "Enter the input file name", help = "Please input faa and gbk file you want to analyze",default=('',''))
 @click.option('-o',"--folder_output",type = str, nargs = 1 ,required = True, prompt = "Enter the output folder name", help = "Please output path of folder you want to store the analysis results. ")
 @click.option("-d","dry_run",help="Generate command only.",default=False,required=False,is_flag=True,)
 @click.option('--addbytext','-add',type = str,help="Input a name for searching  accessory genomes and use them to correct the genome you want to annotated.",required=False,default=False)
