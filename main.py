@@ -33,27 +33,25 @@ from dysfunctional_dectector.src.utilities.genome_download import get_search_res
 
 ###function definition
 def get_input_info(infile,fi):
-    input_info = {}
-    if infile != "":
+    input_info = defaultdict(dict)
+    if infile !="":
         df = pd.read_csv(infile, sep='\t')
         for index, row in df.iterrows():
-            key = row[1] 
-            value = row[2] 
-            input_info[key] = value 
+            input_info[row['genome']]['faa'] = row['protein file']
+            input_info[row['genome']]['gbk'] = row['gbk file']
         return input_info
-    elif fi != "" and infile == "":
-        for file in fi:
-            if file.endswith(".faa"):
-                faa_file = file
-            else:
-                gbk_file = file
-            record = SeqIO.read(gbk_file,"genbank")
-            genome_id = record.id
-        input_info[genome_id][faa_file] = gbk_file
+    elif type(fi)==tuple and infile == "":
+        #for faa_file,gbk_file in fi:
+        faa_file = [_ for _ in fi if _.endswith(".faa")][0]
+        gbk_file = [_ for _ in fi if not _.endswith(".faa")][0]
+        genome_id = os.path.basename(faa_file).replace('.faa','')
+        input_info[genome_id]['faa'] = faa_file
+        input_info[genome_id]['gbk'] = gbk_file
         return input_info
     else:
         logger.error("Please input the metadata file or single faa and gbk file.")
         exit()
+
 
 def command_running(cmd):
     subprocess.run(cmd,shell=True)
@@ -87,16 +85,18 @@ def single_workflow(gbk,faa,out_folder,dry_run,addbytext):
         new_path = f"{out_folder}/s1out/ipr/{g_id}/{new_name}"
         os.rename(old_path,new_path)   
     s2_path = f"{current_directory}/raw_workflow/s2.refine_annotation.py"
-    if addbytext is not None:
+    if addbytext:
         cmd = f"python3 {s2_path} -o {out_folder}/s2out workflow -gid {g_id} -i {out_folder}/s1out -add {addbytext}"
     else:
         cmd = f"python3 {s2_path} -o {out_folder}/s2out workflow -gid {g_id} -i {out_folder}/s1out "
+    print(cmd)
     run_command(cmd,"s2")
-    logger.debug("s2 module has finished.Now s3 module is running.")
+    logger.debug("s2 module has finished. Now s3 module is running.")
     s3_path = f"{current_directory}/raw_workflow/s3.detector.py"
     cmd = f"python3 {s3_path} -o {out_folder}/s3out/{g_id} workflow -gid {g_id} -i {out_folder}/s2out"
     run_command(cmd,"s3")
     logger.debug("s3 module has finished.")
+    
 def combine_result(s2_out,s3_out):
     ###combine result of s2
     s2_combination = defaultdict(dict)
@@ -137,28 +137,23 @@ def combine_result(s2_out,s3_out):
         info_dict.to_csv(f"{s3_out}/combination/{name}_combination.tsv",sep='\t',index=0)
 # parse args
 @click.command()
-@click.option('--infile','-i',help="An Metadata file as input. See example file in XXXX",required=False,default=None)
+@click.option('-i','--infile',help="An Metadata file as input. See example file in XXXX",required=False,default='')
 @click.option('-fi',"--file_input",type = str, nargs = 2 ,required = False, prompt = "Enter the input file name", help = "Please input faa and gbk file you want to analyze")
 @click.option('-o',"--folder_output",type = str, nargs = 1 ,required = True, prompt = "Enter the output folder name", help = "Please output path of folder you want to store the analysis results. ")
-@click.option("-d","dry_run",help="Generate command only.",default=False,required=False,is_flag=True,)
-@click.option('--addbytext','-add',type = str,help="Input a name for searching  accessory genomes and use them to correct the genome you want to annotated.",required=False,default=False)
+@click.option("-d","--dry_run",help="Generate command only.",default=False,required=False,is_flag=True,)
+@click.option('-at','--addbytext',type = str,help="Input a name for searching  accessory genomes and use them to correct the genome you want to annotated.",required=False,default='')
 def cli(infile,file_input,folder_output,dry_run,addbytext):
     input=get_input_info(infile,file_input)
-    if len(input) ==1:
-        faa_path, gbk_path = next(iter(input.items()))
-        print(gbk_path,faa_path)
-        process = multiprocessing.Process(target=single_workflow,args=(gbk_path,faa_path,folder_output,dry_run,addbytext))
+    for genome_id,info in tqdm(input.items()):
+        faa_path, gbk_path = info['faa'],info['gbk']
+        process = multiprocessing.Process(target=single_workflow,args=(gbk_path,faa_path,folder_output,dry_run,addbytext))  
         process.start()
         process.join()
-    else:
-        for key,value in tqdm(input.items()):
-            process = multiprocessing.Process(target=single_workflow,args=(value,key,folder_output,dry_run,addbytext))  
-            process.start()
-            process.join()
     combine_result(f"{folder_output}/s2out",f"{folder_output}/s3out")
-    logger.debug("The given file has been analyzed with s1,s2 and s3,now start accessory genomes annotation.")
+    logger.debug("The given file has been analyzed with s1,s2 and s3")
     if addbytext:    
-##start accessory genome annotation
+        logger.debug("now start accessory genomes annotation.")
+        ##start accessory genome annotation
         search_result = get_search_result(addbytext)
         download_result=download_genome(search_result,folder_output)
         logger.debug("The accessory genome has been downloaded.")

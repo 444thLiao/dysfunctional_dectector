@@ -42,19 +42,22 @@ headers = ['Protein accession',
 v2values = {'intact':1, 
             'no KEGG-annotated':0, 
             'confident pseudo':0.2,
-            'RE(intact)':0.5, 
+            'RE(intact)':1, 
             'RE(not intact)':0.5,
             'not intact':0.5
             }
 
 KOFAMSCAN_ko_list = '/mnt/home-db/pub/protein_db/kegg/v20230301/ko_list'
-all_kos = [_.split('\t')[0] for _ in open(KOFAMSCAN_ko_list).readlines()[1:]]
+def get_all_kos(KOFAMSCAN_ko_list):    
+    all_kos = [_.split('\t')[0] for _ in open(KOFAMSCAN_ko_list).readlines()[1:]]
+    return all_kos
 
 def refining_KOmatrix(kegg_df,
                       locus_is_pseudo,
                       locus2other_analysis2ID,
                       locus2ko,
                       interpro_threshold=0.8,
+                      target_kos=get_all_kos(KOFAMSCAN_ko_list),
                           verbose=1):
     # noted: locus should be look like {GID}_{number}
     
@@ -63,8 +66,8 @@ def refining_KOmatrix(kegg_df,
     gid2ko2pseudo_l = defaultdict(lambda :defaultdict(list))
     ko2intact_l = defaultdict(list)
     gid2cases = defaultdict(dict)
-
-    for ko in all_kos:
+    recase2_l = defaultdict(lambda :defaultdict(list))
+    for ko in target_kos:
         ## For ko not found in this kegg_df
         if ko not in kegg_df.columns:
             for gid in kegg_df.index:
@@ -107,25 +110,20 @@ def refining_KOmatrix(kegg_df,
         ko2row = ko2gid2status_df.iterrows()
         
     for ko,row in ko2row:
-        for gid,v in row.to_dict().items():
-            if v != 'no KEGG-annotated' or ko not in ko2intact_l:
-                continue
-            if len(ko2intact_l[ko]) == 0:
-                continue
-            i = ko2intact_l[ko][0]
-            _a = gid+'_'
-            # extract
-            sub_l2all = {k:v 
-                         for k,v in locus2other_analysis2ID.items()
-                         if k.startswith(_a)}
-            found_count = defaultdict(int)
-            for db,db_v in sorted(locus2other_analysis2ID[i].items()):
-                found = {k:v
-                     for k,v in sub_l2all.items()
-                     if v.get(db,'') ==db_v }
-                for k,v in found.items():
-                    found_count[k]+=1
-            num_db = len(locus2other_analysis2ID[i])
+        if ko not in ko2intact_l or len(ko2intact_l[ko]) == 0:
+            continue
+        target_gids = set([gid for gid,v in row.to_dict().items() if v == 'no KEGG-annotated'])
+        ref_locus = ko2intact_l[ko][0]
+        found_count = defaultdict(int)
+        for db,db_v in sorted(locus2other_analysis2ID[ref_locus].items()):
+            found = {k:v
+                    for k,v in locus2other_analysis2ID.items()
+                    if v.get(db,'') ==db_v and k.split('_')[0] in target_gids} # be careful to this
+            for k,v in found.items():
+                found_count[k]+=1
+        num_db = len(locus2other_analysis2ID[ref_locus])
+
+        for gid in target_gids:
             found_l = [k for k,v in found_count.items()
                        if v >=int(num_db*interpro_threshold)]
             found_l = [l 
@@ -139,21 +137,19 @@ def refining_KOmatrix(kegg_df,
                 gid2ko2pseudo_l[gid][ko].extend(found_l)
             else:
                 cases = 'intact'
+                recase2_l[gid][ko].extend([_  for _ in found_l 
+                                           if _ not in  locus_is_pseudo and _.startswith(f"{gid}_")])
             ko2gid2status_df.loc[ko,gid] = f"RE({cases})"
-            # RE mean retrieved 
-    return ko2gid2status_df,gid2ko2pseudo_l,confident_presence
+    return ko2gid2status_df,gid2ko2pseudo_l,confident_presence,recase2_l
 
 
-def is_confident_pseudo(this_locus,thresholds,genome_pos):
+def is_confident_pseudo(row,thresholds,genome_pos):
     """
     determined whether it meet the edge of the contig
     """
-    pseudo_region = genome_pos.loc[this_locus,'pseudogenized']
-    strand = genome_pos.loc[this_locus,'strand']
+    pseudo_region = row['pseudogenized']
+    strand = row['strand']
     cover_regions = genome_pos.loc[genome_pos['pseudogenized']==pseudo_region,:]
-    # this_lengs = []
-    # for _,row in cover_regions.iterrows():
-    #     this_lengs.append(abs(row['end']-row['start']))
     if strand == -1:
         upstream = cover_regions.index[-1]
     else:
@@ -193,15 +189,13 @@ def assess_confident_pseudo_multi(gid2ko2pseudo_l,confident_presence,
             for locus in locus_l:
                 pseudo2assess_result[locus] = ('likely pseudo',ko,(0,0),0)
             continue
-        lens = []
-        for l in candidate_l:
-            s,e = genome_pos.loc[l,['start','end']]
-            _l = abs(e-s)
-            lens.append(_l)
+        lens = [abs(e-s) for s,e in genome_pos.loc[candidate_l,['start','end']].values]
         low_thres = max(lens)*len_threshold
         max_thres = max(lens)*len_threshold*2
-        for locus in locus_l:
-            is_conf,ll = is_confident_pseudo(locus,(low_thres,max_thres))
+        pseudogen_regions = genome_pos.loc[locus_l,'pseudogenized']
+        sub_genomepos = genome_pos.loc[genome_pos['pseudogenized'].isin(pseudogen_regions)]
+        for locus,row in genome_pos.loc[locus_l,:].iterrows():
+            is_conf,ll = is_confident_pseudo(row,(low_thres,max_thres),sub_genomepos)
             if is_conf:
                 # remaining locus is longer than 50% of the target gene
                 pseudo2assess_result[locus] = ('confident pseudo',ko,(low_thres,max_thres),ll)
@@ -295,15 +289,10 @@ def main(indir,odir,gid,accessory_name=None):
                 for locus in str(locus_list).split(',')}
     ko2ipr, ko2others, locus2other_analysis2ID = fromKOtoIPR(kegg_df,ipr_df,gid)
     
-    ko2gid2status_df,gid2ko2pseudo_l,confident_presence = refining_KOmatrix(kegg_df,locus_is_pseudo,locus2other_analysis2ID,locus2ko,verbose=1)
+    ko2gid2status_df,gid2ko2pseudo_l,confident_presence,recase2_l = refining_KOmatrix(kegg_df,locus_is_pseudo,locus2other_analysis2ID,locus2ko,verbose=1)
 
     pseudo2assess_result = assess_confident_pseudo_multi(gid2ko2pseudo_l,confident_presence,locus_is_pseudo,genome_pos,len_threshold=0.6)
 
-    copy_df = ko2gid2status_df.copy()
-    for locus,(_,ko,_,_) in pseudo2assess_result.items():
-        ori = copy_df.loc[ko,gid]
-        if ori == 'RE(not intact)':
-            copy_df.loc[ko,gid] = 'confident pseudo'
     bin_df = copy_df.applymap(lambda x:v2values[x])
 
 

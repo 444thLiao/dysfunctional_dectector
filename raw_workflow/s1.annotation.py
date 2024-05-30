@@ -163,43 +163,42 @@ def run_annotate(in_files,odir,temp_dir,dry_run=False):
         kofams = f"{KOFAMSCAN_exe} -p {KOFAMSCAN_profiles} -k {KOFAMSCAN_ko_list} --tmp-dir {temp_dir}/{genomename}_kofamscan --cpu {num_cpu} -o {kegg_oname} -f mapper-one-line --no-report-unannotated {infaa} "
         kofams += f' && rm -rf {temp_dir}/{genomename}_kofamscan'
         cmds = check(kegg_oname,kofams,'kofamscan',dry_run=dry_run)
-        logger.debug("Start KoFamscan")
+        logger.debug('#'*20+"     Start KoFamscan")
         try:
             if cmds:
                 Kofampros = Process(target=os.system, args=tuple(cmds))
                 Kofampros.start()
                 Kofampros.join()
-            logger.debug("The KofanScan has done")
+            logger.debug("The KofanScan has done\n\n"+'#'*20+'\n')
         except CalledProcessError as err:
-            logger.error(f"The KofamScan fail to finish due to {err}")
+            logger.error(f"The KofamScan fail to finish due to {err}\n\n"+'#'*20+'\n')
             exit()
-        logger.debug("Files for interproscan and pseudofinder are ready")
+        logger.debug('#'*20+"     Start interproscan")
         ######### Run interpro
         iprcmd = f"""mkdir -p {ipr_oname} && export LD_LIBRARY_PATH='' && {ipr_exe} -i {infaa} -d {ipr_oname} -cpu {num_cpu} -iprlookup -appl CDD,Pfam"""
         ipr_finalname = join(ipr_oname,basename(infaa)+'.tsv')
         cmds = check(ipr_finalname,iprcmd,'interpro',dry_run=dry_run)
-        logger.debug("Interproscan start")
         try:
             if cmds:
                 iprpros = Process(target=os.system,args=tuple(cmds))
                 iprpros.start()
                 iprpros.join()
-            logger.debug("The interproscan has done")
+            logger.debug("The interproscan has done\n\n"+'#'*20+'\n')
         except CalledProcessError as err:
-            logger.error(f"The interproscan fail to finish due to {err}")
+            logger.error(f"The interproscan fail to finish due to {err}\n\n"+'#'*20+'\n')
             exit()
         ######### Run pseudofinder
         pseudocmd = f"mkdir -p {pseudo_oname} ; {pseudofinder_exe} annotate -db {diamond_db}  -g {ingbk} -t {num_cpu} -skpdb -op {pseudo_oname}/{genomename}_nr -di -l 0.8 --compliant --diamond_path {diamond_path}"
         cmds = check(pseudofinder_finalname,pseudocmd,'pseudofinder',dry_run=dry_run)
-        logger.debug("Pseudofinder start")
+        logger.debug('#'*20+"     Start Pseudofinder")
         try:
             if cmds:
                 psdpros = Process(target=os.system,args=tuple(cmds))
                 psdpros.start()
                 psdpros.join()
-            logger.debug("The pseudofinder has done")
+            logger.debug("The pseudofinder has done\n\n"+'#'*20+'\n')
         except CalledProcessError as err:
-            logger.error(f"The pseudofinder fail to finish due to {err}")
+            logger.error(f"The pseudofinder fail to finish due to {err}\n\n"+'#'*20+'\n')
             exit()
         ######### Run pseudofinder merged script
         logger.debug("Try to parse pseudofinder result and merged some splitted pseudogenes.")
