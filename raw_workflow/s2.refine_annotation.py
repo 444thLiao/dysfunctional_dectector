@@ -52,13 +52,49 @@ def get_all_kos(KOFAMSCAN_ko_list):
     all_kos = [_.split('\t')[0] for _ in open(KOFAMSCAN_ko_list).readlines()[1:]]
     return all_kos
 
+
+def get_neighbouring_profile(locus,dis=4):
+    gid,idx = locus.split('_')
+    num_idx = len(idx)
+    neighbouring_locus = [f"{gid}_" + str.zfill(str(i),num_idx) 
+                          for i in range(int(idx)-dis,int(idx)+dis)]
+    return neighbouring_locus
+
+def compare_two_db(db1,db2):
+    shared_db = set(db1).intersection(set(db2))
+    if len(shared_db)==0:
+        return 0
+    same_db = [k for k in shared_db if db1[k]==db2[k]]
+    return len(same_db)/len(shared_db)
+
+def compare_neighbouring_profile(batch_locus1,batch_locus2,l2profile,
+                                 based_db='CDD',return_same=False):
+    cdd_1 = [l2profile.get(l,{}).get(based_db,'') for l in batch_locus1]
+    cdd_2 = [l2profile.get(l,{}).get(based_db,'') for l in batch_locus2]
+    cdd_1 = [_ for _ in cdd_1 if _]
+    cdd_2 = [_ for _ in cdd_2 if _]
+    num_cdd = set(cdd_1).union(set(cdd_2))
+    same_cdd = set(cdd_1).intersection(set(cdd_2))
+    if return_same:
+        return [l for l in batch_locus1 if l2profile.get(l,{}).get(based_db,'') in same_cdd] + [l for l in batch_locus2 if l2profile.get(l,{}).get(based_db,'') in same_cdd]
+    if len(num_cdd)==0:
+        return 0
+    return len(same_cdd)/len(num_cdd)
+
+
 def refining_KOmatrix(kegg_df,
                       locus_is_pseudo,
                       locus2other_analysis2ID,
                       locus2ko,
                       interpro_threshold=0.8,
                       target_kos=get_all_kos(KOFAMSCAN_ko_list),
-                          verbose=1):
+                      verbose=1):
+    """
+    Determining the status of the presence and absence of a specific gene using the following information:
+    1. pseudogene 
+    2. any other similar gene using CDD
+
+    """
     # noted: locus should be look like {GID}_{number}
     
     confident_presence = defaultdict(dict)
@@ -112,33 +148,43 @@ def refining_KOmatrix(kegg_df,
     for ko,row in ko2row:
         if ko not in ko2intact_l or len(ko2intact_l[ko]) == 0:
             continue
+        # genomes with no found KO
         target_gids = set([gid for gid,v in row.to_dict().items() if v == 'no KEGG-annotated'])
         ref_locus = ko2intact_l[ko][0]
-        found_count = defaultdict(int)
-        for db,db_v in sorted(locus2other_analysis2ID[ref_locus].items()):
-            found = {k:v
-                    for k,v in locus2other_analysis2ID.items()
-                    if v.get(db,'') ==db_v and k.split('_')[0] in target_gids} # be careful to this
-            for k,v in found.items():
-                found_count[k]+=1
-        num_db = len(locus2other_analysis2ID[ref_locus])
+        ref_neighbouring_locus = get_neighbouring_profile(ref_locus)
+        ref_db_v = locus2other_analysis2ID[ref_locus]
 
         for gid in target_gids:
-            found_l = [k for k,v in found_count.items()
-                       if v >=int(num_db*interpro_threshold)]
-            found_l = [l 
-                       for l in found_l 
-                       if locus2ko.get(l,'') in ['',ko]]
-            # if found locus belongs to other KO, ignore it
-            if len(found_l)==0:
+            candidate_l = {locus:_dbv
+                    for locus,_dbv in locus2other_analysis2ID.items()
+                    if locus.split('_')[0] in gid}
+            # compare db similarity
+            candidate_l_plus = []
+            for l in candidate_l:
+                # if found locus belongs to other KO, ignore it
+                if locus2ko.get(l,'') not in ['',ko]:
+                    continue
+                sub_db_v = locus2other_analysis2ID[l]
+                ratio = compare_two_db(sub_db_v,ref_db_v)
+                if ratio>=interpro_threshold:
+                    candidate_l_plus.append(l)
+            # compare neighbouring similarity
+            candidate_l_plus_plus = []
+            for l in candidate_l_plus:
+                sub_neighbouring_locus = get_neighbouring_profile(l)
+                ratio1 = compare_neighbouring_profile(sub_neighbouring_locus,ref_neighbouring_locus,locus2other_analysis2ID,'CDD')
+                ratio2 = compare_neighbouring_profile(sub_neighbouring_locus,ref_neighbouring_locus,locus2other_analysis2ID,based_db='Pfam')
+                if max([ratio1,ratio2])>=0.4:
+                    candidate_l_plus_plus.append(l)
+            final_l = candidate_l_plus_plus
+            if len(final_l)==0:
                 continue
-            if all([_ in locus_is_pseudo for _ in found_l]):
+            recase2_l[gid][ko].extend([(_,ref_locus)  for _ in final_l ])
+            if any([_ in locus_is_pseudo for _ in final_l]):
                 cases = 'not intact'
-                gid2ko2pseudo_l[gid][ko].extend(found_l)
+                gid2ko2pseudo_l[gid][ko].extend(final_l)
             else:
                 cases = 'intact'
-                recase2_l[gid][ko].extend([_  for _ in found_l 
-                                           if _ not in  locus_is_pseudo and _.startswith(f"{gid}_")])
             ko2gid2status_df.loc[ko,gid] = f"RE({cases})"
     return ko2gid2status_df,gid2ko2pseudo_l,confident_presence,recase2_l
 
@@ -194,7 +240,7 @@ def assess_confident_pseudo_multi(gid2ko2pseudo_l,confident_presence,
         max_thres = max(lens)*len_threshold*2
         pseudogen_regions = genome_pos.loc[locus_l,'pseudogenized']
         sub_genomepos = genome_pos.loc[genome_pos['pseudogenized'].isin(pseudogen_regions)]
-        for locus,row in genome_pos.loc[locus_l,:].iterrows():
+        for locus,row in sub_genomepos.loc[locus_l,:].iterrows():
             is_conf,ll = is_confident_pseudo(row,(low_thres,max_thres),sub_genomepos)
             if is_conf:
                 # remaining locus is longer than 50% of the target gene
@@ -219,6 +265,9 @@ def fromKOtoIPR(kegg_df,ipr_df,gid):
     if 'Sequence MD5 digest' in ipr_df.columns:
         ipr_df.pop('Sequence MD5 digest')
     subdf = ipr_df.loc[ipr_df['Protein accession'].isin(locus2ko),:]
+    subdf.loc[:,'match length'] = subdf['Stop location'] - subdf['Start location']
+    subdf.loc[:,'q cov'] = subdf['match lengh'].abs()/subdf['Sequence length']*100
+    subdf = subdf.loc[subdf['q cov']>=70,:]
     for i,row in subdf.iterrows():
         l = row['Protein accession']
         locus2other_analysis2ID[l][row['Analysis']] = row['Signature accession']
@@ -259,7 +308,8 @@ def main(indir,odir,gid,accessory_name=None):
     os.makedirs(odir,exist_ok=True)
     refined_ko_infodf = f'{odir}/{gid}_refined_ko_info.tsv'
     refined_ko_bindf = f'{odir}/{gid}_refined_ko_bin.tsv'
-
+    kegg_new_outpath = f'{odir}/{gid}_refined_kegg.tsv'
+    
     if not exists(kofamout_tab):
         l2ko = parse_kofamout(kofamout)
         gid2kegg2locus_info = defaultdict(lambda :defaultdict(list))
@@ -293,7 +343,20 @@ def main(indir,odir,gid,accessory_name=None):
 
     pseudo2assess_result = assess_confident_pseudo_multi(gid2ko2pseudo_l,confident_presence,locus_is_pseudo,genome_pos,len_threshold=0.6)
 
+    refined_kegg_df = kegg_df.copy()
+    for gid,ko2l in recase2_l.items():
+        for ko,locus_list in ko2l.items():
+            v = refined_kegg_df.loc[gid,ko]
+            if str(v)=='nan':
+                refined_kegg_df.loc[gid,ko] = ','.join([_[0] for _ in locus_list])
+
+
+    copy_df = ko2gid2status_df.copy()
     bin_df = copy_df.applymap(lambda x:v2values[x])
+    for locus,(status,ko,reason,r2) in pseudo2assess_result.items():
+        if status == 'likely pseudo':
+            status = 'not intact'
+        copy_df.loc[ko,locus.split('_')[0]] = status
 
 
     # if accessory_name is not None:
@@ -307,6 +370,7 @@ def main(indir,odir,gid,accessory_name=None):
 
     output_file(refined_ko_infodf,copy_df)
     output_file(refined_ko_bindf,bin_df)
+    output_file(kegg_new_outpath,refined_kegg_df)
     logger.debug("Done refining the annotation.")
     logger.debug(f"{gid} result has been output to {realpath(refined_ko_bindf)}")
     

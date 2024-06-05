@@ -50,7 +50,7 @@ def prepare_abbrev2files(abbrev,outdir):
     ref_p = f'{outdir}/{abbrev}.faa'
     #### get aa seqs
     if not exists(ref_p):
-        print(f"Downloading {abbrev} protein sequences.")
+        print(f"Downloading {abbrev} protein sequences. Separated into {batch_iter(raw_locus,10)} batches.")
         aa = []
         for each10_locus in tqdm(batch_iter(raw_locus,10),total=int(len(raw_locus)/10)):
             try:
@@ -88,8 +88,11 @@ def main(kegg_df,gid2info,ofile,outdir,strict_mode):
         ref_p,abbrev_locus2ko = prepare_abbrev2files(abbrev,outdir)
         refined_count = 0
         cmd = f"blastp -query {ref_p} -db {outdir}/{gid} -outfmt 6 -qcov_hsp_perc 90 -evalue 1e-3 -out {outdir}/{gid}_{abbrev}.tab"
-        print(f"perform Blastp {gid} vs {abbrev}")
-        check_call([cmd],shell=1)
+        if exists(f"{outdir}/{gid}_{abbrev}.tab"):
+            print(f"existing Blastp {gid} vs {abbrev}")
+        else:
+            print(f"perform Blastp {gid} vs {abbrev}")
+            check_call([cmd],shell=1)
         # parse blastp table
         gid2abbrev_df = pd.read_csv(f'{outdir}/{gid}_{abbrev}.tab',sep='\t',header=None)
         l2l = {}
@@ -103,16 +106,16 @@ def main(kegg_df,gid2info,ofile,outdir,strict_mode):
         for l1,l2 in l2l.items():
             ko1 = abbrev_locus2ko.get(l1,'')
             ko2 = _l2ko.get(l2,'')
-            if ko1!='' and ko1!=ko2:
+            if ko1!='':
                 infaa_locus2corrected_ko[l2] = ko1
-                refined_count+=1
+                if ko1!=ko2:
+                    refined_count+=1
         ko2l = defaultdict(list)
         for infaa_locus,ko in infaa_locus2corrected_ko.items():
             ko2l[ko].append(infaa_locus)
         ko2l = {k:','.join(sorted(v)) for k,v in ko2l.items()}
         for ko in ko2l:
             kegg_df.loc[gid,ko] = ko2l[ko]
-            
         print(f"Use {abbrev} to correct {gid} annotations: {refined_count}/{len(_l2ko)} ")
 
         if strict_mode:
