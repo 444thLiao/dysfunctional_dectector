@@ -15,7 +15,7 @@ from os.path import join,dirname,realpath
 import pickle,click,os
 from tqdm import tqdm
 from collections import defaultdict
-from dysfunctional_dectector.src.utilities.logging import *
+from dysfunctional_dectector.src.utilities.logging import logger
 
 
 ko2ec_file = '/mnt/home-db/pub/protein_db/kegg/v20230301/link/ko2ec'
@@ -58,8 +58,9 @@ def main(indir,odir,gid,with_unannotated=False):
     ko_infodf = pd.read_csv(refined_ko_infodf_path,sep='\t',index_col=0)
     refined_ko_bindf_path = f'{indir}/{gid}_refined_ko_bin.tsv'
     ko_bindf = pd.read_csv(refined_ko_bindf_path,sep='\t',index_col=0)    
-    subko_df = ko_infodf.loc[ko_infodf[gid]!='no KEGG-annotated',:]
-
+    #subko_df = ko_infodf.loc[ko_infodf[gid]!='no KEGG-annotated',:]
+    subko_df = ko_infodf.copy()
+    
     regular_modules,bifurcation_modules,structural_modules = read_module2ko()
 
     mentioned_kos = list(subko_df.index)

@@ -3,9 +3,7 @@ Using reference-based to refine the annotations
 
 Download or prepare a table based on the KEGG genome database, they contain the full list of the presence/absence of a type strain. 
 
-
-
-todo:
+It is better to be runned with mutliple genomes
 
 
 """
@@ -17,9 +15,9 @@ import pandas as pd
 from os.path import exists,realpath
 import os
 import click
-from dysfunctional_dectector.src.utilities.tk import output_file,kegg_api
+from dysfunctional_dectector.src.utilities.tk import output_file,kegg_api,get_gid_from_locus
 from dysfunctional_dectector.bin.refine_ko_with_ref import prepare_abbrev2files
-from dysfunctional_dectector.src.utilities.logging import *
+from dysfunctional_dectector.src.utilities.logging import logger
 
 
 ## static setting
@@ -54,7 +52,7 @@ def get_all_kos(KOFAMSCAN_ko_list):
 
 
 def get_neighbouring_profile(locus,dis=4):
-    gid,idx = locus.split('_')
+    gid,idx = get_gid_from_locus(locus),locus.split('_')[-1]
     num_idx = len(idx)
     neighbouring_locus = [f"{gid}_" + str.zfill(str(i),num_idx) 
                           for i in range(int(idx)-dis,int(idx)+dis)]
@@ -157,7 +155,7 @@ def refining_KOmatrix(kegg_df,
         for gid in target_gids:
             candidate_l = {locus:_dbv
                     for locus,_dbv in locus2other_analysis2ID.items()
-                    if locus.split('_')[0] in gid}
+                    if get_gid_from_locus(locus) in gid}
             # compare db similarity
             candidate_l_plus = []
             for l in candidate_l:
@@ -249,24 +247,24 @@ def assess_confident_pseudo_multi(gid2ko2pseudo_l,confident_presence,
                 pseudo2assess_result[locus] = ('likely pseudo',ko,(low_thres,max_thres),ll)
     return pseudo2assess_result
 
-def fromKOtoIPR(kegg_df,ipr_df,gid):
+def fromKOtoIPR(kegg_df,ipr_df):
     # read KO and find it ipr-based signature
     locus2other_analysis2ID = defaultdict(dict)
     ko2others = defaultdict(dict)
     ko2ipr = {}
-
-    ko2locus = {k:v 
-                for k,v in kegg_df.loc[gid,:].to_dict().items() 
-                if str(v)!='nan' and k not in ko2ipr}
+    ko2locus = {ko:locus 
+                for gid,row in kegg_df.iterrows()
+                for ko,locus_l in row.to_dict().items()
+                for locus in str(locus_l).split(',')
+                if str(locus_l)!='nan' }
     locus2ko = {}
     for ko,l in ko2locus.items():
-        for _ in l.split(','):
-            locus2ko[_] = ko
+        locus2ko[l] = ko
     if 'Sequence MD5 digest' in ipr_df.columns:
         ipr_df.pop('Sequence MD5 digest')
     subdf = ipr_df.loc[ipr_df['Protein accession'].isin(locus2ko),:]
     subdf.loc[:,'match length'] = subdf['Stop location'] - subdf['Start location']
-    subdf.loc[:,'q cov'] = subdf['match lengh'].abs()/subdf['Sequence length']*100
+    subdf.loc[:,'q cov'] = subdf['match length'].abs()/subdf['Sequence length']*100
     subdf = subdf.loc[subdf['q cov']>=70,:]
     for i,row in subdf.iterrows():
         l = row['Protein accession']
@@ -298,23 +296,18 @@ def get_name(name):
                    for n in names[:5]}
     return abbrev2name
 
-def main(indir,odir,gid,accessory_name=None):
-    # input
-    kofamout = f'{indir}/KOFAMSCAN/{gid}.kofamout'
-    kofamout_tab = kofamout.replace('.kofamout','_anno.tab')
-    ipr_output = f'{indir}/ipr/{gid}/{gid}.faa.tsv'
-    genome_pos_file = f'{indir}/pos/{gid}_pos.tsv'
-    # output
-    os.makedirs(odir,exist_ok=True)
-    refined_ko_infodf = f'{odir}/{gid}_refined_ko_info.tsv'
-    refined_ko_bindf = f'{odir}/{gid}_refined_ko_bin.tsv'
-    kegg_new_outpath = f'{odir}/{gid}_refined_kegg.tsv'
-    
+def read_from_kofamout(kofamout_tab,kofamout,gid=None):
+    """
+    row is genome
+    column is kegg ID
+    """
     if not exists(kofamout_tab):
         l2ko = parse_kofamout(kofamout)
         gid2kegg2locus_info = defaultdict(lambda :defaultdict(list))
         for locus,ko_l in l2ko.items():
             for ko in ko_l.split(';'):
+                if gid is None:
+                    gid = get_gid_from_locus(locus)
                 gid2kegg2locus_info[gid][ko].append(locus)
         gid2kegg2locus_info = {genome:{ko:','.join(list(set(l_list))) 
                                     for ko,l_list in _d.items()} 
@@ -323,21 +316,17 @@ def main(indir,odir,gid,accessory_name=None):
         kegg_df.to_csv(kofamout_tab,sep='\t',index=1)
     else:
         kegg_df = pd.read_csv(kofamout_tab,sep='\t',index_col=0)
+    return kegg_df
 
 
-
-    ipr_df = pd.read_csv(ipr_output,sep='\t',index_col=None,low_memory=False,names=headers)
-    if kegg_df.shape[1] == 1:
-        logger.debug("Refining annotation using genome itself only, it will not be able to distinguish confident/likely pseudogenes.")
-
-    genome_pos  = pd.read_csv(genome_pos_file,sep='\t',index_col=0)
+def processing_f(genome_pos,kegg_df,ipr_df):
     locus_is_pseudo = set(list(genome_pos.index[genome_pos['pseudogenized'].str.contains(':')]))
 
     locus2ko = {locus: ko
                 for ko, _d in kegg_df.to_dict().items()
                 for genome, locus_list in _d.items()
                 for locus in str(locus_list).split(',')}
-    ko2ipr, ko2others, locus2other_analysis2ID = fromKOtoIPR(kegg_df,ipr_df,gid)
+    ko2ipr, ko2others, locus2other_analysis2ID = fromKOtoIPR(kegg_df,ipr_df)
     
     ko2gid2status_df,gid2ko2pseudo_l,confident_presence,recase2_l = refining_KOmatrix(kegg_df,locus_is_pseudo,locus2other_analysis2ID,locus2ko,verbose=1)
 
@@ -350,15 +339,34 @@ def main(indir,odir,gid,accessory_name=None):
             if str(v)=='nan':
                 refined_kegg_df.loc[gid,ko] = ','.join([_[0] for _ in locus_list])
 
-
     copy_df = ko2gid2status_df.copy()
     bin_df = copy_df.applymap(lambda x:v2values[x])
     for locus,(status,ko,reason,r2) in pseudo2assess_result.items():
         if status == 'likely pseudo':
             status = 'not intact'
-        copy_df.loc[ko,locus.split('_')[0]] = status
+        copy_df.loc[ko,get_gid_from_locus(locus)] = status
+    return copy_df,bin_df,refined_kegg_df
+
+def main(indir,odir,gid,accessory_name=None):
+    # input
+    kofamout = f'{indir}/KOFAMSCAN/{gid}.kofamout'
+    kofamout_tab = kofamout.replace('.kofamout','_anno.tab')
+    ipr_output = f'{indir}/ipr/{gid}/{gid}.faa.tsv'
+    genome_pos_file = f'{indir}/pos/{gid}_pos.tsv'
+    # output
+    os.makedirs(odir,exist_ok=True)
+    refined_ko_infodf = f'{odir}/{gid}_refined_ko_info.tsv'
+    refined_ko_bindf = f'{odir}/{gid}_refined_ko_bin.tsv'
+    kegg_new_outpath = f'{odir}/{gid}_refined_kegg.tsv'
+    kegg_df = read_from_kofamout(kofamout_tab,kofamout,gid=gid)
+    
+    if kegg_df.shape[1] == 1:
+        logger.debug("Refining annotation using genome itself only, it will not be able to distinguish confident/likely pseudogenes.")
+    ipr_df = pd.read_csv(ipr_output,sep='\t',index_col=None,low_memory=False,names=headers)
+    genome_pos  = pd.read_csv(genome_pos_file,sep='\t',index_col=0)
 
 
+    copy_df,bin_df,refined_kegg_df = processing_f(genome_pos,kegg_df,ipr_df)
     # if accessory_name is not None:
     #     abbrev2name = get_name(accessory_name)
     #     for abbrev,gname in abbrev2name.items():
@@ -373,6 +381,61 @@ def main(indir,odir,gid,accessory_name=None):
     output_file(kegg_new_outpath,refined_kegg_df)
     logger.debug("Done refining the annotation.")
     logger.debug(f"{gid} result has been output to {realpath(refined_ko_bindf)}")
+    
+
+def merged_multiple(indir,odir,genomelist=[]):
+    logger.debug(f"reading {indir} for {genomelist} ......")
+    # input
+    kofamouts = glob(f'{indir}/KOFAMSCAN/*.kofamout')
+    kofamout_tabs = [kofamout.replace('.kofamout','_anno.tab') 
+                    for kofamout in kofamouts]
+    ipr_outputs = glob(f'{indir}/ipr/*/*.faa.tsv')
+    genome_pos_files = glob(f'{indir}/pos/*_pos.tsv')
+    num_gs = len(kofamout_tabs)
+    if genomelist:
+        kofamouts = [_ for _ in kofamouts 
+                     if _.split('/')[-1].rsplit('.')[0] in genomelist]
+        kofamout_tabs = [kofamout.replace('.kofamout','_anno.tab') 
+                        for kofamout in kofamouts]
+        ipr_outputs = [_ for _ in ipr_outputs 
+                       if _.split('/')[-2] in genomelist]
+        genome_pos_files = [_ for _ in genome_pos_files 
+                            if _.split('/')[-1].rsplit('_pos')[0] in genomelist]
+    # output
+    os.makedirs(odir,exist_ok=True)
+    refined_ko_infodf = f'{odir}/{num_gs}Genomes_refined_ko_info.tsv'
+    refined_ko_bindf = f'{odir}/{num_gs}Genomes_refined_ko_bin.tsv'
+    kegg_new_outpath = f'{odir}/{num_gs}Genomes_refined_kegg.tsv'
+    
+    logger.debug(f"found {len(kofamouts)} kegg,ipr,pos files......")
+    kegg_dfs = []
+    for kofamout_tab,kofamout in zip(kofamout_tabs,kofamouts):
+        kegg_df = read_from_kofamout(kofamout_tab,kofamout)
+        kegg_dfs.append(kegg_df)
+    kegg_df = pd.concat(kegg_dfs,axis=0)
+
+    ipr_dfs = []
+    for ipr_output in ipr_outputs:
+        ipr_df = pd.read_csv(ipr_output,sep='\t',index_col=None,low_memory=False,names=headers)
+        ipr_dfs.append(ipr_df)
+    ipr_df = pd.concat(ipr_dfs,axis=0)
+
+    gposss = []
+    for genome_pos_file in genome_pos_files:
+        gpos = pd.read_csv(genome_pos_file,sep='\t',index_col=0)
+        gposss.append(gpos)
+    genome_pos = pd.concat(gposss,axis=0)
+
+    #### after reading
+    logger.debug(f"Done reading")
+    
+    copy_df,bin_df,refined_kegg_df = processing_f(genome_pos,kegg_df,ipr_df)
+
+    output_file(refined_ko_infodf,copy_df)
+    output_file(refined_ko_bindf,bin_df)
+    output_file(kegg_new_outpath,refined_kegg_df)
+    logger.debug("Done refining the annotation.")
+    logger.debug(f"All {len(kofamout_tabs)} genomes result has been output to {realpath(refined_ko_bindf)}")
     
     
 # parse args
@@ -395,6 +458,22 @@ def workflow(ctx,genome,indir,addbytext):
     accessory_name = addbytext
     main(indir,outputdir,genome,accessory_name)
 
+
+@cli.command()
+@click.option('--indir','-i',help="Input directory which is also a output directory of s1.",required=False,default=None)
+@click.option('-gl','--genomelist',help="Input file containing the genome IDs you want to use or a comma-separated genome ids. ",required=False,default='')
+@click.pass_context
+def mlworkflow(ctx,indir,genomelist):
+    outputdir = ctx.obj['odir']
+    indir = indir
+    if indir is None:
+        indir = outputdir+'/s1out'
+    genomelist = genomelist
+    if exists(genomelist):
+        genomelist = open(genomelist).strip().split('\n')
+    else:
+        genomelist = [_ for _ in genomelist.split(',') if _]
+    merged_multiple(indir,outputdir,genomelist)
 
 ######### RUN
 if __name__ == '__main__':

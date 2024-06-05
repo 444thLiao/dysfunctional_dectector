@@ -1,13 +1,14 @@
 from os.path import exists,dirname
 import os
 import logging
-import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 from Bio import SeqIO
 from bioservices.kegg import KEGG
 kegg_api = KEGG()
 
+def get_gid_from_locus(locus):
+    return locus.split('_')[0]
 
 def check(ofile,cmd,name,dry_run=False,LOGGER=logging.getLogger('dysfunction_logger')):
     executed_cmd=[]

@@ -17,7 +17,6 @@ import pandas as pd
 from Bio import SeqIO
 from Bio.KEGG import REST
 from tqdm import tqdm
-
 from dysfunctional_dectector.src.utilities.tk import batch_iter, output_file
 
 

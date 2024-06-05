@@ -1,8 +1,7 @@
 """
 KEGG, ipr, pseudofinder annotations
-1.
-2.
-todo:
+
+can be runned with a single genome
 
 """
 from os.path import *
