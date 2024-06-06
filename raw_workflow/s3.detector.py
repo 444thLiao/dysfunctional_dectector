@@ -70,7 +70,7 @@ def main(indir,odir,gid,with_unannotated=False):
     os.makedirs(odir,exist_ok=True)
     os.makedirs(f"{odir}/module_tables/",exist_ok=True)
     module2info = defaultdict(dict)
-    for m in tqdm(related_modules):
+    for m in tqdm(related_modules,desc='# of KEGG modules: '):
         module_name = m2name[m]
         module2info[m]['Name'] = module_name
         if m not in regular_modules:

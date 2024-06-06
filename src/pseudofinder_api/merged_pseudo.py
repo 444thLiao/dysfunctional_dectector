@@ -44,6 +44,8 @@ default_nrfna = '/home-db/pub/protein_db/nr/v20230523/nr'
 
 #############
 def get_gfffile(inpattern):
+    if inpattern is None:
+        return []
     allf = []
     for e in inpattern.split(','):
         e = e.strip()
@@ -87,7 +89,7 @@ def step1(ctx,):
     nr_fna = ctx.obj['nr_path']
     ########
     all_pids = set()
-    for f,gname in tqdm(zip(gff_list,names)):
+    for f,gname in tqdm(zip(gff_list,names),desc='# of GFF files: '):
         if 'merged_for' in f:continue
         f1 = f'{dirname(f)}/{gname}{suffix}_proteome.faa.blastP_output.tsv'
         f2 = f'{dirname(f)}/{gname}{suffix}_intergenic.fasta.blastX_output.tsv'
@@ -109,12 +111,14 @@ def step1(ctx,):
         print(f"Existed subnr_db file, but we need to add {len(missing_pids)} more to it ")
         with open(f'{odir}/subj_extra.pids','w') as f1:
             f1.write('\n'.join(missing_pids))
-        print(f"Run time consumeing step. Be patient (extracting sequences from nr file )")
+        if not missing_pids:
+            return
         os.system(f"seqtk subseq {nr_fna} {odir}/subj_extra.pids >> {subnr_db}")
+        os.system(f"diamond makedb --in {subnr_db} -d {subnr_db}.dmnd")
     else:
         print(f"Run time consumeing step. Be patient (extracting sequences from nr file )")
         os.system(f"seqtk subseq {nr_fna} {odir}/subj.pids > {subnr_db}")
-    os.system(f"diamond makedb --in {subnr_db} -d {subnr_db}.dmnd")
+        os.system(f"diamond makedb --in {subnr_db} -d {subnr_db}.dmnd")
     
 
 def parse_posdf(gbk,intergenic_fasta,pseudo_fasta):
@@ -153,8 +157,9 @@ def step2(ctx,gbkpattern):
     nodir = f"{odir}/merged_for/"
     if not exists(nodir):
         os.makedirs(nodir)
-    for gff,gname in tqdm(zip(gff_list,names)):
-        if 'merged_for/' in gff:continue
+    for gff,gname in tqdm(zip(gff_list,names),desc='# of GFF files: '):
+        if 'merged_for/' in gff:
+            continue
         records = []
         f1 = gff.replace('_pseudos.gff','_cds.fasta')
         records += list(SeqIO.parse(f1,'fasta'))
@@ -166,7 +171,7 @@ def step2(ctx,gbkpattern):
         with open(f'{nodir}/{gname}_pseudos.fasta','w') as f:
             SeqIO.write([_ for _ in records if _.id in locus_],f,'fasta')
     #### blastx search using pseudo-gene sequences against smaller nr database
-    for fna in tqdm(glob(f"{nodir}/*_pseudos.fasta")):
+    for fna in tqdm(glob(f"{nodir}/*_pseudos.fasta"),desc='# of pseudo-fasta files: '):
         gname = fna.split('/')[-1].split('_')[0]
         cmd = f"diamond blastx --db {subnr_db}.dmnd -q {fna} -f 6 > {nodir}/{gname}{suffix}_pseudos.fasta.blastX_output.tsv -k 1000000"
         if not exists(f"{nodir}/{gname}{suffix}_pseudos.fasta.blastX_output.tsv"):
@@ -177,10 +182,11 @@ def step2(ctx,gbkpattern):
         e = e.strip()
         f = [realpath(_) for _ in glob(e)]
         allgbks.extend(f)
-    allgbks = [gbk for gbk in allgbks if gbk.split('/')[-1].replace('.gbk','') in names]    
+    allgbks = [gbk for gbk in allgbks 
+               if gbk.split('/')[-1].replace('.gbk','') in names]    
     print(f"found {len(allgbks)} for {len(names)} genomes.")
     name2gbk = {gbk.split('/')[-1].replace('.gbk',''):gbk for gbk in allgbks}
-    for gff,gname in tqdm(zip(gff_list,names)):
+    for gff,gname in tqdm(zip(gff_list,names),desc='# of GFF files: '):
         gbk = name2gbk[gname]
         IG_fna = gff.replace('_pseudos.gff','_intergenic.fasta')
         pseudo_fna = f'{nodir}/{gname}_pseudos.fasta'
@@ -264,8 +270,12 @@ def get_refbased_loc(hits,shared_hits,locus2length):
     return shared_ref,refbased_loc
 
 @cli.command()
+@click.option('--uni','-u',help="input directory of some files.",default=None,required=False)
 @click.pass_context
-def step3(ctx,):
+def step3(ctx,uni=None):
+    """
+    read subnr_db, pseudogenes.fasta
+    """
     #### main
     tqdm.write(f"merge neighboring pseudogenes into one row since they can be merged")
     gff_list = ctx.obj['inpattern']
@@ -273,7 +283,10 @@ def step3(ctx,):
     odir = ctx.obj['odir']
     names = ctx.obj['names']
     subnr_db = ctx.obj['subnr']
-    nodir = f"{odir}/merged_for/"
+    if uni is None:
+        nodir = f"{odir}/merged_for/"
+    else:
+        nodir = uni
     ########
     ref2len = {}
     for r in SeqIO.parse(subnr_db,'fasta'):
@@ -288,7 +301,6 @@ def step3(ctx,):
         pos_df = pd.read_csv(posfile,sep='\t',index_col=0)
         pos_df.columns = [int(_) if _!='pseudo' else _ 
                           for _ in pos_df.columns]
-        
         
         blastxfile =  f'{nodir}/{gname}{suffix}_pseudos.fasta.blastX_output.tsv'
         new_blastdf = pd.read_csv(blastxfile,sep='\t',header=None)
@@ -383,7 +395,8 @@ def merge(ctx,):
         gname2merged_pseudo[rows[0]].append(tuple(rows[1:]))
 
     final_merged_dfs = []
-    for genome,merged_pseudo in tqdm(gname2merged_pseudo.items()):
+    for genome,merged_pseudo in tqdm(gname2merged_pseudo.items(),
+                                     desc='Number of merged pseudos: '):
         sub_df = pseudo_df_nano.loc[pseudo_df_nano['genome']==genome,:]
         
         ordered_l = []
@@ -436,5 +449,10 @@ if __name__ == '__main__':
 
 
 
+"""
+python /home-user/thliao/script/dysfunctional_dectector/src/pseudofinder_api/merged_pseudo.py -i /mnt/ivy/thliao/project/coral_ruegeria/nanopore_processing/annotations/DFD/s1out/pseudofinder/*/*_nr_pseudos.gff -o /mnt/ivy/thliao/project/coral_ruegeria/nanopore_processing/annotations/DFD/s1out/pseudofinder step1 ; python /home-user/thliao/script/dysfunctional_dectector/src/pseudofinder_api/merged_pseudo.py -i /mnt/ivy/thliao/project/coral_ruegeria/nanopore_processing/annotations/DFD/s1out/pseudofinder/*/*_nr_pseudos.gff -o /mnt/ivy/thliao/project/coral_ruegeria/nanopore_processing/annotations/DFD/s1out/pseudofinder step2 -gp /mnt/ivy/thliao/project/coral_ruegeria/nanopore_processing/annotations/DFD/s1out/pseudofinder/*/*/gbk
 
+python /home-user/thliao/script/dysfunctional_dectector/src/pseudofinder_api/merged_pseudo.py -i /mnt/ivy/thliao/project/coral_ruegeria/nanopore_processing/tmp/s1out/pseudofinder/F6/F6_nr_pseudos.gff -o /mnt/ivy/thliao/project/coral_ruegeria/nanopore_processing/tmp/s1out/pseudofinder/F6 -snr /mnt/ivy/thliao/project/coral_ruegeria/nanopore_processing/tmp/s1out/pseudofinder/subnr step3 -u /mnt/ivy/thliao/project/coral_ruegeria/nanopore_processing/tmp/s1out/pseudofinder/merged_for/;
 
+python /home-user/thliao/script/dysfunctional_dectector/src/pseudofinder_api/merged_pseudo.py -i /mnt/ivy/thliao/project/coral_ruegeria/nanopore_processing/tmp/s1out/pseudofinder/F6/F6_nr_pseudos.gff -o /mnt/ivy/thliao/project/coral_ruegeria/nanopore_processing/tmp/s1out/pseudofinder/F6 merge 
+"""

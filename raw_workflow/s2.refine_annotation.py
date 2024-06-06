@@ -1,7 +1,7 @@
 """
 Using reference-based to refine the annotations
 
-Download or prepare a table based on the KEGG genome database, they contain the full list of the presence/absence of a type strain. 
+Download or prepare a table based on the KEGG genome database, they contain the full list of the presence/absence of a type strain.
 
 It is better to be runned with mutliple genomes
 
@@ -12,15 +12,20 @@ import pandas as pd
 from tqdm import tqdm
 from collections import defaultdict
 import pandas as pd
-from os.path import exists,realpath
+from os.path import exists,realpath,join,dirname
 import os
 import click
-from dysfunctional_dectector.src.utilities.tk import output_file,kegg_api,get_gid_from_locus
+import portion as P
+import pandas as pd
+from dysfunctional_dectector.src.utilities.tk import output_file,kegg_api,get_gid_from_locus,check,parse_gbk
 from dysfunctional_dectector.bin.refine_ko_with_ref import prepare_abbrev2files
 from dysfunctional_dectector.src.utilities.logging import logger
-
-
+import warnings;warnings.filterwarnings('ignore')
+from subprocess import CalledProcessError
+from multiprocessing import Process
 ## static setting
+mergedpseudo_script = join(dirname(dirname(__file__)),'src','pseudofinder_api','merged_pseudo.py')
+
 headers = ['Protein accession',
  'Sequence MD5 digest',
  'Sequence length',
@@ -37,16 +42,16 @@ headers = ['Protein accession',
  'GO annotations',
  'Pathways annotations']
 
-v2values = {'intact':1, 
-            'no KEGG-annotated':0, 
+v2values = {'intact':1,
+            'no KEGG-annotated':0,
             'confident pseudo':0.2,
-            'RE(intact)':1, 
+            'RE(intact)':1,
             'RE(not intact)':0.5,
             'not intact':0.5
             }
 
 KOFAMSCAN_ko_list = '/mnt/home-db/pub/protein_db/kegg/v20230301/ko_list'
-def get_all_kos(KOFAMSCAN_ko_list):    
+def get_all_kos(KOFAMSCAN_ko_list):
     all_kos = [_.split('\t')[0] for _ in open(KOFAMSCAN_ko_list).readlines()[1:]]
     return all_kos
 
@@ -54,7 +59,7 @@ def get_all_kos(KOFAMSCAN_ko_list):
 def get_neighbouring_profile(locus,dis=4):
     gid,idx = get_gid_from_locus(locus),locus.split('_')[-1]
     num_idx = len(idx)
-    neighbouring_locus = [f"{gid}_" + str.zfill(str(i),num_idx) 
+    neighbouring_locus = [f"{gid}_" + str.zfill(str(i),num_idx)
                           for i in range(int(idx)-dis,int(idx)+dis)]
     return neighbouring_locus
 
@@ -89,12 +94,12 @@ def refining_KOmatrix(kegg_df,
                       verbose=1):
     """
     Determining the status of the presence and absence of a specific gene using the following information:
-    1. pseudogene 
+    1. pseudogene
     2. any other similar gene using CDD
 
     """
     # noted: locus should be look like {GID}_{number}
-    
+
     confident_presence = defaultdict(dict)
     gid2ko2intact_l = defaultdict(dict)
     gid2ko2pseudo_l = defaultdict(lambda :defaultdict(list))
@@ -139,10 +144,11 @@ def refining_KOmatrix(kegg_df,
     ko2gid2status_df = pd.DataFrame.from_dict(gid2cases)
     if verbose:
         ko2row = tqdm(ko2gid2status_df.iterrows(),
-                 total=ko2gid2status_df.shape[0])
+                 total=ko2gid2status_df.shape[0],
+                 desc="# of KOs: ")
     else:
         ko2row = ko2gid2status_df.iterrows()
-        
+
     for ko,row in ko2row:
         if ko not in ko2intact_l or len(ko2intact_l[ko]) == 0:
             continue
@@ -224,16 +230,17 @@ def assess_confident_pseudo_multi(gid2ko2pseudo_l,confident_presence,
     for gid,_d in confident_presence.items():
         for ko,l in _d.items():
             ko2intact_l[ko].extend(l)
-    
+
     logger.debug(f"Start assessing identified pseudogenes ...")
     pseudo2assess_result = {}
-    for ko, locus_l in tqdm(ko2pseudo_l.items()):
+    for ko, locus_l in tqdm(ko2pseudo_l.items(),desc="# of KOs with pseudo: "):
         candidate_l = ko2intact_l[ko]
         if len(candidate_l)==0:
             for locus in locus_l:
                 pseudo2assess_result[locus] = ('likely pseudo',ko,(0,0),0)
             continue
-        lens = [abs(e-s) for s,e in genome_pos.loc[candidate_l,['start','end']].values]
+        lens = [abs(e-s) 
+                for s,e in genome_pos.loc[candidate_l,['start','end']].values]
         low_thres = max(lens)*len_threshold
         max_thres = max(lens)*len_threshold*2
         pseudogen_regions = genome_pos.loc[locus_l,'pseudogenized']
@@ -241,7 +248,7 @@ def assess_confident_pseudo_multi(gid2ko2pseudo_l,confident_presence,
         for locus,row in sub_genomepos.loc[locus_l,:].iterrows():
             is_conf,ll = is_confident_pseudo(row,(low_thres,max_thres),sub_genomepos)
             if is_conf:
-                # remaining locus is longer than 50% of the target gene
+                # remaining locus is longer than 60% of the target gene
                 pseudo2assess_result[locus] = ('confident pseudo',ko,(low_thres,max_thres),ll)
             else:
                 pseudo2assess_result[locus] = ('likely pseudo',ko,(low_thres,max_thres),ll)
@@ -252,14 +259,16 @@ def fromKOtoIPR(kegg_df,ipr_df):
     locus2other_analysis2ID = defaultdict(dict)
     ko2others = defaultdict(dict)
     ko2ipr = {}
-    ko2locus = {ko:locus 
-                for gid,row in kegg_df.iterrows()
-                for ko,locus_l in row.to_dict().items()
-                for locus in str(locus_l).split(',')
-                if str(locus_l)!='nan' }
+    ko2locus = defaultdict(list)
+    for gid,row in kegg_df.iterrows():
+        for ko,locus_l in row.to_dict().items():
+            for locus in str(locus_l).split(','):
+                if str(locus_l)!='nan':
+                    ko2locus[ko].append(locus)
     locus2ko = {}
-    for ko,l in ko2locus.items():
-        locus2ko[l] = ko
+    for ko,locus_l in ko2locus.items():
+        for locus in locus_l:
+            locus2ko[locus] = ko
     if 'Sequence MD5 digest' in ipr_df.columns:
         ipr_df.pop('Sequence MD5 digest')
     subdf = ipr_df.loc[ipr_df['Protein accession'].isin(locus2ko),:]
@@ -276,7 +285,7 @@ def fromKOtoIPR(kegg_df,ipr_df):
             ko2ipr[ko] = row['InterPro accession']
         else:
             ko2others[ko][row['Analysis']] = row['Signature accession']
-    return ko2ipr, ko2others, locus2other_analysis2ID
+    return locus2ko,ko2ipr, ko2others, locus2other_analysis2ID
 
 def parse_kofamout(inf):
     l2ko = {}
@@ -292,7 +301,7 @@ def get_name(name):
     logger.debug(f"Use the following genomes(top5 at most) as accessory genomes: ")
     logger.debug('\n'.join(names))
 
-    abbrev2name = {n.split(' ')[1]:n[0].split(' ',2)[-1].rsplit(' ',1)[0] 
+    abbrev2name = {n.split(' ')[1]:n[0].split(' ',2)[-1].rsplit(' ',1)[0]
                    for n in names[:5]}
     return abbrev2name
 
@@ -309,8 +318,8 @@ def read_from_kofamout(kofamout_tab,kofamout,gid=None):
                 if gid is None:
                     gid = get_gid_from_locus(locus)
                 gid2kegg2locus_info[gid][ko].append(locus)
-        gid2kegg2locus_info = {genome:{ko:','.join(list(set(l_list))) 
-                                    for ko,l_list in _d.items()} 
+        gid2kegg2locus_info = {genome:{ko:','.join(list(set(l_list)))
+                                    for ko,l_list in _d.items()}
                                     for genome,_d in gid2kegg2locus_info.items()}
         kegg_df = pd.DataFrame.from_dict(gid2kegg2locus_info, orient='index')
         kegg_df.to_csv(kofamout_tab,sep='\t',index=1)
@@ -321,14 +330,12 @@ def read_from_kofamout(kofamout_tab,kofamout,gid=None):
 
 def processing_f(genome_pos,kegg_df,ipr_df):
     locus_is_pseudo = set(list(genome_pos.index[genome_pos['pseudogenized'].str.contains(':')]))
+    # Likely wrong, sometimes (extremely rare) a locus can be annotated to multiple KOs.
+    locus2ko, ko2ipr, ko2others, locus2other_analysis2ID = fromKOtoIPR(kegg_df,ipr_df)
 
-    locus2ko = {locus: ko
-                for ko, _d in kegg_df.to_dict().items()
-                for genome, locus_list in _d.items()
-                for locus in str(locus_list).split(',')}
-    ko2ipr, ko2others, locus2other_analysis2ID = fromKOtoIPR(kegg_df,ipr_df)
-    
-    ko2gid2status_df,gid2ko2pseudo_l,confident_presence,recase2_l = refining_KOmatrix(kegg_df,locus_is_pseudo,locus2other_analysis2ID,locus2ko,verbose=1)
+    ko2gid2status_df,gid2ko2pseudo_l,confident_presence,recase2_l = refining_KOmatrix(kegg_df,locus_is_pseudo,
+                                                                                      locus2other_analysis2ID,
+                                                                                      locus2ko,verbose=1)
 
     pseudo2assess_result = assess_confident_pseudo_multi(gid2ko2pseudo_l,confident_presence,locus_is_pseudo,genome_pos,len_threshold=0.6)
 
@@ -359,7 +366,7 @@ def main(indir,odir,gid,accessory_name=None):
     refined_ko_bindf = f'{odir}/{gid}_refined_ko_bin.tsv'
     kegg_new_outpath = f'{odir}/{gid}_refined_kegg.tsv'
     kegg_df = read_from_kofamout(kofamout_tab,kofamout,gid=gid)
-    
+
     if kegg_df.shape[1] == 1:
         logger.debug("Refining annotation using genome itself only, it will not be able to distinguish confident/likely pseudogenes.")
     ipr_df = pd.read_csv(ipr_output,sep='\t',index_col=None,low_memory=False,names=headers)
@@ -381,32 +388,110 @@ def main(indir,odir,gid,accessory_name=None):
     output_file(kegg_new_outpath,refined_kegg_df)
     logger.debug("Done refining the annotation.")
     logger.debug(f"{gid} result has been output to {realpath(refined_ko_bindf)}")
+
+
+def gen_genome_pos(gbk,pseudo_file):
+    locus2info = parse_gbk(gbk)
+    locus2info = pd.DataFrame.from_dict(locus2info).T
+    locus2info.columns = ['contig', 'start', 'end', 'strand']
+
+    pseudo_df_nano = pd.read_csv(pseudo_file,sep='\t',index_col=0)
+
+    contig2interval = defaultdict(list)
+    for _, row in pseudo_df_nano.iterrows():
+        contig2interval[row["contig"]].append( (P.closed(row["start"], row["end"]), _ )  )
+    sdf = locus2info
+    pseudo = []
+    for _, row in sdf.iterrows():
+        cand = contig2interval[row["contig"]]
+        s, e = row['start'], row['end']
+        i = P.closed(s, e)
+        any_overlap = [c[1] for c in cand if c[0].overlaps(i)]
+        if len(any_overlap)!=0:
+            pseudo.append(';'.join(any_overlap))
+        else:
+            pseudo.append('NOT')
+    sdf.loc[:, 'pseudogenized'] = pseudo  
+    return sdf
+
+def refine_pseudofinder(odir,dry_run=False):
+    ## out of iterations
+    genomename = '*'
+    pseudo_oname = os.path.join(odir,genomename)
+    pseudofinder_finalname = os.path.join(pseudo_oname,f'{genomename}_nr_pseudos.gff')
+    ingbk_pattern = os.path.join(pseudo_oname,f'{genomename}.gbk')
+    ###
     
+    ######### Run pseudofinder merged script
+    logger.debug("Try to parse pseudofinder result and merged some splitted pseudogenes.")
+    odir = dirname(pseudo_oname) # without genomename
+    cmd1 = f"python {mergedpseudo_script} -i '{pseudofinder_finalname}' -o {odir} step1 "
+    cmd2 = f"python {mergedpseudo_script} -i '{pseudofinder_finalname}' -o {odir} step2 -gp '{ingbk_pattern}' "
+    cmd = ';'.join([cmd1,cmd2])
+    logger.debug("run : "+ cmd)
+    try:
+        psdpros = Process(target=os.system,args=tuple([cmd]))
+        psdpros.start()
+        psdpros.join()
+    except CalledProcessError as err:
+        logger.error(f"The pseudofinder fail to finish due to {err}")
+        exit()    
+        
+    for output_gff in glob('pseudofinder_finalname'):
+        genomename = output_gff.split('/')[-2]
+        pos_oname = os.path.join(odir,'pos',genomename+'_pos.tsv')
+        pseudofinder_merged_file = os.path.join(pseudo_oname,f'pseudofinderALL_w_annot_MERGEDcontinuous.tsv')
+                
+        pseudo_oname = os.path.join(odir,genomename)
+        pseudofinder_finalname = os.path.join(pseudo_oname,f'{genomename}_nr_pseudos.gff')        
+        cmd3 = f"python {mergedpseudo_script} -i {pseudofinder_finalname} -o {odir}/{genomename} -snr {odir}/subnr step3 -u {odir}/merged_for"
+        cmd4 = f"python {mergedpseudo_script} -i {pseudofinder_finalname} -o {odir}/{genomename} merge "
+        cmd = ';'.join([cmd3,cmd4])
+        cmds = check(pseudofinder_merged_file,cmd,'Merged pseudofinder',dry_run=dry_run)
+        try:
+            if cmds:
+                psdpros = Process(target=os.system,args=tuple(cmds))
+                psdpros.start()
+                psdpros.join()
+            else:
+                logger.debug("The pseudofinder has been merged")
+        except CalledProcessError as err:
+            logger.error(f"The pseudofinder fail to finish due to {err}")
+            exit()
+        ## generate genome_pos
+        ingbk = os.path.join(odir,genomename,genomename+'.gbk')
+        pos_df = gen_genome_pos(ingbk,pseudofinder_merged_file)
+        os.makedirs(dirname(pos_oname),exist_ok=True)
+        pos_df.to_csv(pos_oname,sep='\t',index=1)
+
 
 def merged_multiple(indir,odir,genomelist=[]):
+    logger.debug(f'processing the refinement of pseudofinder results...')
+    refine_pseudofinder(f'{indir}/pseudofinder/',)
+    
     logger.debug(f"reading {indir} for {genomelist} ......")
     # input
     kofamouts = glob(f'{indir}/KOFAMSCAN/*.kofamout')
-    kofamout_tabs = [kofamout.replace('.kofamout','_anno.tab') 
+    kofamout_tabs = [kofamout.replace('.kofamout','_anno.tab')
                     for kofamout in kofamouts]
     ipr_outputs = glob(f'{indir}/ipr/*/*.faa.tsv')
     genome_pos_files = glob(f'{indir}/pos/*_pos.tsv')
     num_gs = len(kofamout_tabs)
     if genomelist:
-        kofamouts = [_ for _ in kofamouts 
+        kofamouts = [_ for _ in kofamouts
                      if _.split('/')[-1].rsplit('.')[0] in genomelist]
-        kofamout_tabs = [kofamout.replace('.kofamout','_anno.tab') 
+        kofamout_tabs = [kofamout.replace('.kofamout','_anno.tab')
                         for kofamout in kofamouts]
-        ipr_outputs = [_ for _ in ipr_outputs 
+        ipr_outputs = [_ for _ in ipr_outputs
                        if _.split('/')[-2] in genomelist]
-        genome_pos_files = [_ for _ in genome_pos_files 
+        genome_pos_files = [_ for _ in genome_pos_files
                             if _.split('/')[-1].rsplit('_pos')[0] in genomelist]
     # output
     os.makedirs(odir,exist_ok=True)
     refined_ko_infodf = f'{odir}/{num_gs}Genomes_refined_ko_info.tsv'
     refined_ko_bindf = f'{odir}/{num_gs}Genomes_refined_ko_bin.tsv'
     kegg_new_outpath = f'{odir}/{num_gs}Genomes_refined_kegg.tsv'
-    
+
     logger.debug(f"found {len(kofamouts)} kegg,ipr,pos files......")
     kegg_dfs = []
     for kofamout_tab,kofamout in zip(kofamout_tabs,kofamouts):
@@ -425,10 +510,10 @@ def merged_multiple(indir,odir,genomelist=[]):
         gpos = pd.read_csv(genome_pos_file,sep='\t',index_col=0)
         gposss.append(gpos)
     genome_pos = pd.concat(gposss,axis=0)
-
+    print(genome_pos)
     #### after reading
     logger.debug(f"Done reading")
-    
+
     copy_df,bin_df,refined_kegg_df = processing_f(genome_pos,kegg_df,ipr_df)
 
     output_file(refined_ko_infodf,copy_df)
@@ -436,8 +521,8 @@ def merged_multiple(indir,odir,genomelist=[]):
     output_file(kegg_new_outpath,refined_kegg_df)
     logger.debug("Done refining the annotation.")
     logger.debug(f"All {len(kofamout_tabs)} genomes result has been output to {realpath(refined_ko_bindf)}")
-    
-    
+
+
 # parse args
 @click.group()
 @click.option('--odir','-o',help="output directory")
