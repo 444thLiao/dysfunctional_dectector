@@ -437,15 +437,14 @@ def refine_pseudofinder(odir,dry_run=False):
         logger.error(f"The pseudofinder fail to finish due to {err}")
         exit()    
         
-    for output_gff in glob('pseudofinder_finalname'):
+    for output_gff in glob(pseudofinder_finalname):
         genomename = output_gff.split('/')[-2]
-        pos_oname = os.path.join(odir,'pos',genomename+'_pos.tsv')
-        pseudofinder_merged_file = os.path.join(pseudo_oname,f'pseudofinderALL_w_annot_MERGEDcontinuous.tsv')
-                
+        pos_oname = os.path.join(dirname(odir),'pos',genomename+'_pos.tsv')
         pseudo_oname = os.path.join(odir,genomename)
-        pseudofinder_finalname = os.path.join(pseudo_oname,f'{genomename}_nr_pseudos.gff')        
-        cmd3 = f"python {mergedpseudo_script} -i {pseudofinder_finalname} -o {odir}/{genomename} -snr {odir}/subnr step3 -u {odir}/merged_for"
-        cmd4 = f"python {mergedpseudo_script} -i {pseudofinder_finalname} -o {odir}/{genomename} merge "
+        pseudofinder_merged_file = os.path.join(pseudo_oname,f'pseudofinderALL_w_annot_MERGEDcontinuous.tsv')     
+        ####
+        cmd3 = f"python {mergedpseudo_script} -i {output_gff} -o {odir}/{genomename} -snr {odir}/subnr step3 -u {odir}/merged_for"
+        cmd4 = f"python {mergedpseudo_script} -i {output_gff} -o {odir}/{genomename} merge "
         cmd = ';'.join([cmd3,cmd4])
         cmds = check(pseudofinder_merged_file,cmd,'Merged pseudofinder',dry_run=dry_run)
         try:
@@ -510,7 +509,6 @@ def merged_multiple(indir,odir,genomelist=[]):
         gpos = pd.read_csv(genome_pos_file,sep='\t',index_col=0)
         gposss.append(gpos)
     genome_pos = pd.concat(gposss,axis=0)
-    print(genome_pos)
     #### after reading
     logger.debug(f"Done reading")
 

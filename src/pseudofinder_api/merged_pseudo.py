@@ -111,9 +111,8 @@ def step1(ctx,):
         print(f"Existed subnr_db file, but we need to add {len(missing_pids)} more to it ")
         with open(f'{odir}/subj_extra.pids','w') as f1:
             f1.write('\n'.join(missing_pids))
-        if not missing_pids:
-            return
-        os.system(f"seqtk subseq {nr_fna} {odir}/subj_extra.pids >> {subnr_db}")
+        if missing_pids:
+            os.system(f"seqtk subseq {nr_fna} {odir}/subj_extra.pids >> {subnr_db}")
         os.system(f"diamond makedb --in {subnr_db} -d {subnr_db}.dmnd")
     else:
         print(f"Run time consumeing step. Be patient (extracting sequences from nr file )")
@@ -174,7 +173,7 @@ def step2(ctx,gbkpattern):
     for fna in tqdm(glob(f"{nodir}/*_pseudos.fasta"),desc='# of pseudo-fasta files: '):
         gname = fna.split('/')[-1].split('_')[0]
         cmd = f"diamond blastx --db {subnr_db}.dmnd -q {fna} -f 6 > {nodir}/{gname}{suffix}_pseudos.fasta.blastX_output.tsv -k 1000000"
-        if not exists(f"{nodir}/{gname}{suffix}_pseudos.fasta.blastX_output.tsv"):
+        if not exists(f"{nodir}/{gname}{suffix}_pseudos.fasta.blastX_output.tsv") or os.path.getsize(f"{nodir}/{gname}{suffix}_pseudos.fasta.blastX_output.tsv")==0:
             os.system(cmd)
             
     allgbks = []
