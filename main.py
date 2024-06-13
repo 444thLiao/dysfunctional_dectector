@@ -42,8 +42,9 @@ def get_input_info(infile,fi):
         df = pd.read_csv(infile, sep='\t')
         for index, row in df.iterrows():
             input_info[row['genome']]['faa'] = row['protein file']
-            input_info[row['genome']]['gbk'] = row['gbk file']
-        return input_info
+            input_info[row['genome']]['gbk'] = row['gbk file']    
+        any_abrev = df.loc[df['abbrev'].isna(),:].shape[0]==0
+        return input_info,any_abrev
     elif type(fi)==tuple and infile == "":
         #for faa_file,gbk_file in fi:
         faa_file = [_ for _ in fi if _.endswith(".faa")][0]
@@ -51,7 +52,7 @@ def get_input_info(infile,fi):
         genome_id = os.path.basename(faa_file).replace('.faa','')
         input_info[genome_id]['faa'] = faa_file
         input_info[genome_id]['gbk'] = gbk_file
-        return input_info
+        return input_info,False
     else:
         logger.error("Please input the metadata file or single faa and gbk file.")
         exit()
@@ -66,7 +67,6 @@ def run_command(cmd,module_name):
         exit()
 
 def single_workflow(gbk,faa,out_folder,dry_run,addbytext):
-
     logger.debug(f"Now s1 module is running for {faa.split('/')[-1]}")
     cmd = f"python3 {s1_path} -fi {faa} {gbk} -o {out_folder}/s1out "
     run_command(cmd,"s1")
@@ -79,8 +79,11 @@ def single_workflow(gbk,faa,out_folder,dry_run,addbytext):
         new_path = f"{out_folder}/s1out/ipr/{g_id}/{new_name}"
         os.rename(old_path,new_path)   
 
-def merged_multiple_workflow(out_folder,num_gs):
-    cmd = f"python3 {s2_path} -o {out_folder}/s2out mlworkflow -i {out_folder}/s1out "  
+def merged_multiple_workflow(out_folder,num_gs,link_file=None):
+    if link_file is None:
+        cmd = f"python3 {s2_path} -o {out_folder}/s2out mlworkflow -i {out_folder}/s1out "  
+    else:
+        cmd = f"python3 {s2_path} -o {out_folder}/s2out -lf {link_file} mlworkflow -i {out_folder}/s1out "  
     logger.debug("running : " + cmd)
     run_command(cmd,"s2")
     logger.debug("s2 module has finished. Now s3 module is running.")
@@ -135,7 +138,7 @@ def cli(infile,file_input,folder_output,dry_run,addbytext,num_threads):
         folder_path = f"{folder_output}/{folder}"
         os.makedirs(folder_path, exist_ok=True)
             
-    input = get_input_info(infile,file_input)
+    input,any_abrev = get_input_info(infile,file_input)
     args_collect = []
     with mp.Pool(processes=num_threads) as tp:
         for genome_id,info in tqdm(input.items(),desc='Genomes: '):
@@ -143,11 +146,15 @@ def cli(infile,file_input,folder_output,dry_run,addbytext,num_threads):
             args_collect.append((gbk_path,faa_path,folder_output,dry_run,addbytext))
         r = list(tqdm(tp.imap(run, args_collect), 
                       total=len(args_collect),desc='# of Running tasks: '))
+
     if len(input)==1:
         combine_result(f"{folder_output}/s3out")
     else:
         num_gs = len(input)
-        merged_multiple_workflow(folder_output,num_gs)
+        if any_abrev:
+            merged_multiple_workflow(folder_output,num_gs,infile)
+        else:
+            merged_multiple_workflow(folder_output,num_gs)
     
     # logger.debug("The given file has been analyzed with s1,s2 and s3")
     # if addbytext:    

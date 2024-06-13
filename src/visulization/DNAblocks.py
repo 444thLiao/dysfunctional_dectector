@@ -7,7 +7,10 @@ from Bio import SeqIO
 pd.options.display.expand_frame_repr = False
 import io
 from glob import glob
-
+from os.path import *
+import os
+import pandas as pd
+from pygenomeviz import GenomeViz
 import matplotlib.pyplot as plt
 import plotly.express as px
 from dna_features_viewer import GraphicFeature, GraphicRecord
@@ -280,5 +283,102 @@ for ko,col in fullcurated_df.loc[:,substats_df.columns].iteritems():
             show_two_locus(locus_list,l2cog=l2cog,highlight_locus=[ref_locus])
             #print(gid)
 
+
+
+########### validating two locus via alignment .
+def get_align(genome_pos,
+              ref_gid,sub_gid,
+              ref_locus,
+              subj_locus,dist_bp = 5000):
+
+    gbk1 = f"/mnt/ivy/thliao/project/coral_ruegeria/nanopore_processing/canu_o/{ref_gid}/09_prokka/{ref_gid}.gbk"
+    gbk2 = f"/mnt/ivy/thliao/project/coral_ruegeria/nanopore_processing/canu_o/{sub_gid}/09_prokka/{sub_gid}.gbk"
+
+    ref_contig,ref_start,ref_end = genome_pos.loc[ref_locus,['contig','start','end']]
+    ref_start,ref_end = ref_start-dist_bp,ref_end+dist_bp
+
+    subj_contig,subj_start,subj_end = genome_pos.loc[subj_locus,['contig','start','end']]
+    subj_start,subj_end = subj_start-dist_bp,subj_end+dist_bp   
+    records = {_.id:_ for _ in SeqIO.parse(gbk1,'genbank')}
+    ref_gbk = records[ref_contig][ref_start:ref_end]
+    f = [fea for fea in ref_gbk.features if fea.qualifiers.get('locus_tag',[''])[0]==ref_locus and fea.type=='CDS']
+    if f[0].strand == -1:
+        oid = ref_gbk.id
+        ref_gbk = ref_gbk.reverse_complement()
+        ref_gbk.id = oid
+    with open('./ref.fasta','w') as f1:
+        SeqIO.write(ref_gbk,f1,'fasta-2line')        
+    records = {_.id:_ for _ in SeqIO.parse(gbk2,'genbank')}
+    subj_gbk = records[subj_contig][subj_start:subj_end]
+    f = [fea for fea in subj_gbk.features if fea.qualifiers.get('locus_tag',[''])[0]==subj_locus and fea.type=='CDS']
+    if f[0].strand == -1:
+        oid = subj_gbk.id
+        subj_gbk = subj_gbk.reverse_complement()
+        subj_gbk.id = oid
+    with open('./subj.fasta','w') as f1:
+        SeqIO.write(subj_gbk,f1,'fasta-2line')   
+
+    cmd = f"blastn -query ref.fasta -subject subj.fasta -outfmt 6 > ./tmp.tab; rm -r ref.fasta subj.fasta"
+    os.system(cmd)
+    return ref_gbk,subj_gbk
+
+def manual_check_validation(tab,genome_pos,
+                            ref_locus,
+                            subj_locus,
+                            dist_bp = 5000):
+    # name: O6fna_L7nucl.tab
+    ref_gid = tab.split('/')[-1].split('fna')[0]
+    subj_gid = tab.split('/')[-1].split('_')[-1].split('nucl')[0]
+
+    ref_gbk,subj_gbk = get_align(genome_pos,ref_gid,subj_gid,ref_locus,subj_locus,dist_bp=dist_bp,)
+
+
+    f1 = [(f.location.start.real,
+        f.location.end.real,
+        f.location.strand) for f in ref_gbk.features if f.type=='CDS']
+    f2 = [(f.location.start.real,
+        f.location.end.real,
+        f.location.strand) for f in subj_gbk.features if f.type=='CDS']
+    genome_list = [
+        dict(name=ref_gid, size=len(ref_gbk.seq), features=f1),
+        dict(name=subj_gid, size=len(subj_gbk.seq), features=f2),
+    ]
+    g_feas = [ ref_gbk,subj_gbk]
+
+    gv = GenomeViz()
+    for gidx,genome in enumerate(genome_list):
+        name, size, features = genome["name"], genome["size"], genome["features"]
+        track = gv.add_feature_track(name, size)
+        for idx, feature in enumerate(features):
+            _gbk = g_feas[gidx]
+            feas = [_ for _ in _gbk.features if _.type=='CDS']
+            fea = feas[idx]
+            name = fea.qualifiers.get('gene',[''])[0]
+            if not name:
+                name = fea.qualifiers.get('locus_tag',[''])[0]
+            start, end, strand = feature
+            if fea.qualifiers.get('locus_tag',[''])[0] in [subj_locus,ref_locus]:
+                track.add_feature(start, end, strand, 
+                            #plotstyle="bigarrow", 
+                              label=name,
+                            facecolor='red',linewidth=1,arrow_shaft_ratio=1.0,size_ratio=0.5
+                            )
+            else:
+                track.add_feature(start, end, strand, 
+                            #plotstyle="bigarrow",  
+                            facecolor='#0078d7',
+                            label=name,arrow_shaft_ratio=1.0,size_ratio=0.5
+                            )
+    link_text = pd.read_csv('./tmp.tab',sep='\t',header=None,)
+    for _,row in link_text.iterrows():
+        name1 = row[0].split("_")[0]
+        name2 = row[1].split("_")[0]
+        s,e = row[[6,7]]
+        _s,_e = row[[8,9]]
+        gv.add_link((name1,s,e), (name2,_s,_e),curve=True,
+                    v=float(row[2]), vmin=50)
+        gv.set_colorbar(["grey",], vmin=50)
+    os.system(f"rm ./tmp.tab")
+    return gv
 
 

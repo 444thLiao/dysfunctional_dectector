@@ -22,16 +22,16 @@ from dysfunctional_dectector.src.utilities.tk import batch_iter, output_file
 
 def check_format(link_file):
     link_df = pd.read_csv(link_file,sep='\t',index_col=0)
-    assert list(link_df.columns) == ['infaa','abbrev']
+    assert len(set(['protein file','abbrev']).difference(set(link_df.columns)))==0
     for gid,row in link_df.iterrows():
-        infaa = row['infaa']
+        infaa = row['protein file']
         if not exists(realpath(infaa)):
             nowinfaa = realpath(dirname(realpath(link_file))+infaa.strip('.'))
         else:
             nowinfaa = realpath(infaa)
         if not exists(nowinfaa):
             raise IOError(f'can not find {infaa}. even using {nowinfaa}')
-        link_df.loc[gid,'infaa'] = nowinfaa
+        link_df.loc[gid,'protein file'] = nowinfaa
     return link_df
 
 def prepare_abbrev2files(abbrev,outdir):
@@ -49,7 +49,7 @@ def prepare_abbrev2files(abbrev,outdir):
     ref_p = f'{outdir}/{abbrev}.faa'
     #### get aa seqs
     if not exists(ref_p):
-        print(f"Downloading {abbrev} protein sequences. Separated into {batch_iter(raw_locus,10)} batches.")
+        print(f"Downloading {abbrev} protein sequences. Separated into {len(batch_iter(raw_locus,10))} batches.")
         aa = []
         for each10_locus in tqdm(batch_iter(raw_locus,10),total=int(len(raw_locus)/10)):
             try:
@@ -71,7 +71,7 @@ def prepare_abbrev2files(abbrev,outdir):
 
 def main(kegg_df,gid2info,ofile,outdir,strict_mode):
     for gid,row in gid2info.iterrows():
-        infaa = row['infaa']
+        infaa = row['protein file']
         abbrev = row['abbrev']
         if str(abbrev)=='nan':
             continue

@@ -175,8 +175,12 @@ def run_annotate(in_files,odir,temp_dir,dry_run=False):
             logger.error(f"The pseudofinder fail to finish due to {err}\n\n"+'#'*20+'\n')
             exit()
         os.system(f"ln -sf `realpath {ingbk}` {pseudo_oname}/{genomename}.gbk")
-
-
+        _odir = os.path.join(odir,'link_files')
+        os.makedirs(_odir,exist_ok=True)
+        os.system(f"ln -sf `realpath {infaa}` {_odir}/{genomename}.faa")
+        ### maybe wrong. since ffn maybe not existed.
+        os.system(f"ln -sf `realpath {infaa.replace('.faa','.ffn')}` {_odir}/{genomename}.ffn")
+        
 # parse args
 @click.command()
 @click.option('-fi',"--file_input",type = str, nargs = 2 ,required = True, prompt = "Enter the input file name", help = "Please input faa and gbk file you want to analyze")

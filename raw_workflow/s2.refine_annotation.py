@@ -12,8 +12,9 @@ import pandas as pd
 from tqdm import tqdm
 from collections import defaultdict
 import pandas as pd
-from os.path import exists,realpath,join,dirname
+from os.path import exists,realpath,join,dirname,basename
 import os
+from Bio import SeqIO
 import click
 import portion as P
 import pandas as pd
@@ -21,10 +22,12 @@ from dysfunctional_dectector.src.utilities.tk import output_file,kegg_api,get_gi
 from dysfunctional_dectector.bin.refine_ko_with_ref import prepare_abbrev2files
 from dysfunctional_dectector.src.utilities.logging import logger
 import warnings;warnings.filterwarnings('ignore')
-from subprocess import CalledProcessError
+from subprocess import CalledProcessError,check_call
 from multiprocessing import Process
+import multiprocessing as mp
 ## static setting
 mergedpseudo_script = join(dirname(dirname(__file__)),'src','pseudofinder_api','merged_pseudo.py')
+ref_based_refine_path = join(dirname(dirname(__file__)),'bin','refine_ko_with_ref.py')
 
 headers = ['Protein accession',
  'Sequence MD5 digest',
@@ -49,6 +52,8 @@ v2values = {'intact':1,
             'RE(not intact)':0.5,
             'not intact':0.5
             }
+def run(cmd):
+    check_call(cmd,shell=1)
 
 KOFAMSCAN_ko_list = '/mnt/home-db/pub/protein_db/kegg/v20230301/ko_list'
 def get_all_kos(KOFAMSCAN_ko_list):
@@ -85,11 +90,50 @@ def compare_neighbouring_profile(batch_locus1,batch_locus2,l2profile,
     return len(same_cdd)/len(num_cdd)
 
 
+def get_targetKO_from_alignment(subj_ffn,
+                                ref_fna,
+                                oodir,
+                                contig,start,end,
+                                locus2length
+                                ):
+    sub_gid = subj_ffn.split('/')[-1].split('.')[0]
+    gid = ref_fna.split('/')[-1].split('.')[0]
+    otab = f"{oodir}/{gid}fna_{sub_gid}nucl.tab"
+    if not exists(f"{oodir}/{gid}fna.nhr"):
+        cmd = f"makeblastdb -dbtype nucl -in {ref_fna} -out {oodir}/{gid}fna ; blastn -query {subj_ffn} -db {oodir}/{gid}fna -outfmt 6 > {otab}"
+    else:
+        cmd = f"blastn -query {subj_ffn} -db {oodir}/{gid}fna -outfmt 6 > {otab}"
+    if not exists(otab) or os.path.getsize(otab)==0:
+        check_call(cmd,shell=1)
+
+    ## todo: speed up it
+    gid = otab.split('fna')[0].split('/')[-1]
+    if os.path.getsize(otab)==0:
+        return []
+    d = pd.read_csv(otab,sep='\t',header=None)
+    found_locus = []
+    d = d.loc[d[1]==contig,:]
+    d.loc[:,'start'] = d[[8,9]].min(1)
+    d.loc[:,'end'] = d[[8,9]].max(1)
+    subd = d.loc[~((d.end<=start-2000)|(d.start>=end+2000)),:]
+    for i,row in subd.iterrows():
+        s,e = row[['start','end']]
+        i = P.closed(s, e)
+        any_overlap = P.closed(start,end).overlaps(i)
+        if any_overlap:
+            intersection_r = P.closed(start,end).intersection(i)
+            length = intersection_r.upper-intersection_r.lower+1
+            subj_ratio = length/locus2length[row[0]]>0.2
+            ref_ratio = length/(abs(end-start)+1)
+            if subj_ratio >=0.2 and ref_ratio >=0.8:
+                found_locus.append(row[0])
+    return found_locus
+
 def refining_KOmatrix(kegg_df,
                       locus_is_pseudo,
-                      locus2other_analysis2ID,
-                      locus2ko,
-                      interpro_threshold=0.8,
+                      genome_pos,
+                      indir,
+                      odir,
                       target_kos=get_all_kos(KOFAMSCAN_ko_list),
                       verbose=1):
     """
@@ -140,7 +184,13 @@ def refining_KOmatrix(kegg_df,
                 gid2ko2intact_l[gid][ko] = [_  for _ in all_l
                                             if _ not in pseudo_l]
             gid2cases[gid][ko] = cases
-    logger.debug(f"Start use Interproscan annotations to refine kegg anntoations...")
+    ko2intact_l = {k:list(set(v)) for k,v in ko2intact_l.items()}
+
+    # locus2length = {}
+    # for gid in kegg_df.index:
+    #     subj_ffn = f"{indir}/link_files/{gid}.ffn"
+    #     locus2length.update({_.id:len(_.seq) for _ in SeqIO.parse(subj_ffn,'fasta')})
+    #logger.debug(f"Start use Interproscan annotations to refine kegg anntoations...")
     ko2gid2status_df = pd.DataFrame.from_dict(gid2cases)
     if verbose:
         ko2row = tqdm(ko2gid2status_df.iterrows(),
@@ -148,39 +198,57 @@ def refining_KOmatrix(kegg_df,
                  desc="# of KOs: ")
     else:
         ko2row = ko2gid2status_df.iterrows()
-
+    ko_idx = 0
     for ko,row in ko2row:
-        if ko not in ko2intact_l or len(ko2intact_l[ko]) == 0:
+        logger.debug(f"Now is {ko_idx}/{len(ko2row)} KOs......")
+        if (ko not in ko2intact_l) or len(ko2intact_l[ko]) == 0:
             continue
         # genomes with no found KO
         target_gids = set([gid for gid,v in row.to_dict().items() if v == 'no KEGG-annotated'])
-        ref_locus = ko2intact_l[ko][0]
-        ref_neighbouring_locus = get_neighbouring_profile(ref_locus)
-        ref_db_v = locus2other_analysis2ID[ref_locus]
-
+        logger.debug(f"{len(target_gids)} genomes with no KEGG-annotated {ko}")
+        # ref_locus = ko2intact_l[ko][0]
+        # ref_neighbouring_locus = get_neighbouring_profile(ref_locus)
+        # ref_db_v = locus2other_analysis2ID[ref_locus]
+        ko_idx += 1
         for gid in target_gids:
-            candidate_l = {locus:_dbv
-                    for locus,_dbv in locus2other_analysis2ID.items()
-                    if get_gid_from_locus(locus) in gid}
-            # compare db similarity
-            candidate_l_plus = []
-            for l in candidate_l:
-                # if found locus belongs to other KO, ignore it
-                if locus2ko.get(l,'') not in ['',ko]:
-                    continue
-                sub_db_v = locus2other_analysis2ID[l]
-                ratio = compare_two_db(sub_db_v,ref_db_v)
-                if ratio>=interpro_threshold:
-                    candidate_l_plus.append(l)
-            # compare neighbouring similarity
-            candidate_l_plus_plus = []
-            for l in candidate_l_plus:
-                sub_neighbouring_locus = get_neighbouring_profile(l)
-                ratio1 = compare_neighbouring_profile(sub_neighbouring_locus,ref_neighbouring_locus,locus2other_analysis2ID,'CDD')
-                ratio2 = compare_neighbouring_profile(sub_neighbouring_locus,ref_neighbouring_locus,locus2other_analysis2ID,based_db='Pfam')
-                if max([ratio1,ratio2])>=0.4:
-                    candidate_l_plus_plus.append(l)
-            final_l = candidate_l_plus_plus
+            # genomes without this ko
+            # logger.debug(f"Processing {gid}")
+            subj_ffn = f"{indir}/link_files/{gid}.ffn"
+            locus2length = {_.id:len(_.seq) for _ in SeqIO.parse(subj_ffn,'fasta')}
+            found_locus = []
+            for ref_locus in list(set(ko2intact_l[ko])):
+                ref_gid = get_gid_from_locus(ref_locus)
+                contig,start,end = genome_pos.loc[ref_locus,['contig','start','end']]
+                #logger.debug(f"{contig} {start} {end}")
+                ref_fna = f"{indir}/link_files/{ref_gid}.fna"
+                found_locus = get_targetKO_from_alignment(subj_ffn,ref_fna,odir,contig,start,end,locus2length)
+                #logger.debug(f"found {ko} in {gid} with {ref_gid}: {ref_locus}.......")
+                if found_locus:
+                    logger.debug(f"found !!! {found_locus} based on {ref_locus}")
+                    break
+            
+            # candidate_l = {locus:_dbv
+            #         for locus,_dbv in locus2other_analysis2ID.items()
+            #         if get_gid_from_locus(locus) in gid}
+            # # compare db similarity
+            # candidate_l_plus = []
+            # for l in candidate_l:
+            #     # if found locus belongs to other KO, ignore it
+            #     if locus2ko.get(l,'') not in ['',ko]:
+            #         continue
+            #     sub_db_v = locus2other_analysis2ID[l]
+            #     ratio = compare_two_db(sub_db_v,ref_db_v)
+            #     if ratio>=interpro_threshold:
+            #         candidate_l_plus.append(l)
+            # # compare neighbouring similarity
+            # candidate_l_plus_plus = []
+            # for l in candidate_l_plus:
+            #     sub_neighbouring_locus = get_neighbouring_profile(l)
+            #     ratio1 = compare_neighbouring_profile(sub_neighbouring_locus,ref_neighbouring_locus,locus2other_analysis2ID,'CDD')
+            #     ratio2 = compare_neighbouring_profile(sub_neighbouring_locus,ref_neighbouring_locus,locus2other_analysis2ID,based_db='Pfam')
+            #     if max([ratio1,ratio2])>=0.4:
+            #         candidate_l_plus_plus.append(l)
+            final_l = found_locus
             if len(final_l)==0:
                 continue
             recase2_l[gid][ko].extend([(_,ref_locus)  for _ in final_l ])
@@ -190,6 +258,8 @@ def refining_KOmatrix(kegg_df,
             else:
                 cases = 'intact'
             ko2gid2status_df.loc[ko,gid] = f"RE({cases})"
+            
+        
     return ko2gid2status_df,gid2ko2pseudo_l,confident_presence,recase2_l
 
 
@@ -328,14 +398,17 @@ def read_from_kofamout(kofamout_tab,kofamout,gid=None):
     return kegg_df
 
 
-def processing_f(genome_pos,kegg_df,ipr_df):
+def processing_f(genome_pos,kegg_df,indir,odir,):
     locus_is_pseudo = set(list(genome_pos.index[genome_pos['pseudogenized'].str.contains(':')]))
     # Likely wrong, sometimes (extremely rare) a locus can be annotated to multiple KOs.
-    locus2ko, ko2ipr, ko2others, locus2other_analysis2ID = fromKOtoIPR(kegg_df,ipr_df)
+    #locus2ko, ko2ipr, ko2others, locus2other_analysis2ID = fromKOtoIPR(kegg_df,ipr_df)
 
-    ko2gid2status_df,gid2ko2pseudo_l,confident_presence,recase2_l = refining_KOmatrix(kegg_df,locus_is_pseudo,
-                                                                                      locus2other_analysis2ID,
-                                                                                      locus2ko,verbose=1)
+    ko2gid2status_df,gid2ko2pseudo_l,confident_presence,recase2_l = refining_KOmatrix(kegg_df,
+                                                                                      locus_is_pseudo,
+                                                                                      genome_pos,
+                                                                                      indir,
+                                                                                      odir,
+                                                                                      verbose=1)
 
     pseudo2assess_result = assess_confident_pseudo_multi(gid2ko2pseudo_l,confident_presence,locus_is_pseudo,genome_pos,len_threshold=0.6)
 
@@ -464,9 +537,9 @@ def refine_pseudofinder(odir,dry_run=False):
         pos_df.to_csv(pos_oname,sep='\t',index=1)
 
 
-def merged_multiple(indir,odir,genomelist=[]):
+def merged_multiple(indir,odir,genomelist=[],link_file=None):
     logger.debug(f'processing the refinement of pseudofinder results...')
-    refine_pseudofinder(f'{indir}/pseudofinder/',)
+    #refine_pseudofinder(f'{indir}/pseudofinder/',)
     
     logger.debug(f"reading {indir} for {genomelist} ......")
     # input
@@ -487,6 +560,9 @@ def merged_multiple(indir,odir,genomelist=[]):
                             if _.split('/')[-1].rsplit('_pos')[0] in genomelist]
     # output
     os.makedirs(odir,exist_ok=True)
+    ko_infodf = f'{odir}/{num_gs}Genomes_raw_ko_info.tsv'
+    pos_path = f'{odir}/{num_gs}Genomes_pos.tsv'
+    
     refined_ko_infodf = f'{odir}/{num_gs}Genomes_refined_ko_info.tsv'
     refined_ko_bindf = f'{odir}/{num_gs}Genomes_refined_ko_bin.tsv'
     kegg_new_outpath = f'{odir}/{num_gs}Genomes_refined_kegg.tsv'
@@ -497,22 +573,36 @@ def merged_multiple(indir,odir,genomelist=[]):
         kegg_df = read_from_kofamout(kofamout_tab,kofamout)
         kegg_dfs.append(kegg_df)
     kegg_df = pd.concat(kegg_dfs,axis=0)
-
-    ipr_dfs = []
-    for ipr_output in ipr_outputs:
-        ipr_df = pd.read_csv(ipr_output,sep='\t',index_col=None,low_memory=False,names=headers)
-        ipr_dfs.append(ipr_df)
-    ipr_df = pd.concat(ipr_dfs,axis=0)
+    kegg_df.to_csv(ko_infodf,sep='\t',index=1)
+    
+    # ipr_dfs = []
+    # for ipr_output in ipr_outputs:
+    #     ipr_df = pd.read_csv(ipr_output,sep='\t',index_col=None,low_memory=False,names=headers)
+    #     ipr_dfs.append(ipr_df)
+    # ipr_df = pd.concat(ipr_dfs,axis=0)
 
     gposss = []
     for genome_pos_file in genome_pos_files:
         gpos = pd.read_csv(genome_pos_file,sep='\t',index_col=0)
         gposss.append(gpos)
     genome_pos = pd.concat(gposss,axis=0)
+    genome_pos.to_csv(pos_path,sep='\t',index=1)
     #### after reading
     logger.debug(f"Done reading")
 
-    copy_df,bin_df,refined_kegg_df = processing_f(genome_pos,kegg_df,ipr_df)
+    if link_file is not None:
+        ofile = f"{odir}/refine/{basename(ko_infodf).rpartition('.')[0]+'_refined.'+basename(ko_infodf).rpartition('.')[-1]}"
+        if not exists(ofile):
+            cmd = f"python {ref_based_refine_path} -i {link_file} -k {ko_infodf} -o {odir}/refine -ss"
+            logger.debug(f"run {cmd}")
+            check_call(cmd,shell=1)
+        else:
+            logger.debug(f"existed {ofile}.... continue")
+        kegg_df = pd.read_csv(ofile,sep='\t',index_col=0)
+        logger.debug(f"processing {ofile}")
+    oodir = f"{odir}/align"
+    os.makedirs(oodir,exist_ok=True)
+    copy_df,bin_df,refined_kegg_df = processing_f(genome_pos,kegg_df,indir,oodir)
 
     output_file(refined_ko_infodf,copy_df)
     output_file(refined_ko_bindf,bin_df)
@@ -524,10 +614,12 @@ def merged_multiple(indir,odir,genomelist=[]):
 # parse args
 @click.group()
 @click.option('--odir','-o',help="output directory")
+@click.option("-lf", "--link_file", help="input file linking between KEGG abbrev and Genome ID. such as 'sit\tGCA_0011965.1' ",required=False,default=None)
 @click.pass_context
-def cli(ctx,odir):
+def cli(ctx,odir,link_file):
     ctx.ensure_object(dict)
     ctx.obj['odir'] = odir
+    ctx.obj['link_file'] = link_file
 
 @cli.command()
 @click.option('--genome','-gid',help="Genome ID")
@@ -548,6 +640,7 @@ def workflow(ctx,genome,indir,addbytext):
 @click.pass_context
 def mlworkflow(ctx,indir,genomelist):
     outputdir = ctx.obj['odir']
+    link_file = ctx.obj['link_file']
     indir = indir
     if indir is None:
         indir = outputdir+'/s1out'
@@ -556,7 +649,7 @@ def mlworkflow(ctx,indir,genomelist):
         genomelist = open(genomelist).strip().split('\n')
     else:
         genomelist = [_ for _ in genomelist.split(',') if _]
-    merged_multiple(indir,outputdir,genomelist)
+    merged_multiple(indir,outputdir,genomelist,link_file)
 
 ######### RUN
 if __name__ == '__main__':
