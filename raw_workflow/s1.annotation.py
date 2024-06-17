@@ -26,7 +26,7 @@ pseudofinder_diamond_db = '/home-db/pub/protein_db/nr/v20230523/diamond_index/nr
 diamond_path = '/home-db/pub/protein_db/nr/v20230523/diamond_index/diamond'
 diamond_db = "/home-db/pub/protein_db/nr/v20230523/diamond_index/nr.dmnd"
 pseudofinder_exe = 'python3 /mnt/storage3/yfdai/download/pseudofinder/pseudofinder-master/pseudofinder.py'
-ipr_exe = '/mnt/storage3/yfdai/download/interproscan/interproscan-5.67-99.0/interproscan.sh'
+#ipr_exe = '/mnt/storage3/yfdai/download/interproscan/interproscan-5.67-99.0/interproscan.sh'
 num_cpu = 5
 
 
@@ -124,7 +124,7 @@ def run_annotate(in_files,odir,temp_dir,dry_run=False):
         kegg_oname = os.path.join(odir,'KOFAMSCAN',genomename+'.kofamout')
         pseudo_oname = os.path.join(odir,'pseudofinder',genomename)
         pseudofinder_finalname = os.path.join(pseudo_oname,f'{genomename}_nr_pseudos.gff')
-        ipr_oname = os.path.join(odir,'ipr',genomename)
+        #ipr_oname = os.path.join(odir,'ipr',genomename)
 
         ######### Run kofamscan
         ogdir = os.path.join(odir,'KOFAMSCAN')
@@ -145,20 +145,20 @@ def run_annotate(in_files,odir,temp_dir,dry_run=False):
             exit()
         
         ######### Run interpro
-        iprcmd = f"""mkdir -p {ipr_oname} && export LD_LIBRARY_PATH='' && {ipr_exe} -i {infaa} -d {ipr_oname} -cpu {num_cpu} -iprlookup -appl CDD,Pfam"""
-        ipr_finalname = join(ipr_oname,basename(infaa)+'.tsv')
-        cmds = check(ipr_finalname,iprcmd,'interpro',dry_run=dry_run)
-        try:
-            if cmds:
-                logger.debug('#'*20+"     Start interproscan")
-                iprpros = Process(target=os.system,args=tuple(cmds))
-                iprpros.start()
-                iprpros.join()
-            else:
-                logger.debug("The interproscan has done\n\n"+'#'*20+'\n')
-        except CalledProcessError as err:
-            logger.error(f"The interproscan fail to finish due to {err}\n\n"+'#'*20+'\n')
-            exit()
+        # iprcmd = f"""mkdir -p {ipr_oname} && export LD_LIBRARY_PATH='' && {ipr_exe} -i {infaa} -d {ipr_oname} -cpu {num_cpu} -iprlookup -appl CDD,Pfam"""
+        # ipr_finalname = join(ipr_oname,basename(infaa)+'.tsv')
+        # cmds = check(ipr_finalname,iprcmd,'interpro',dry_run=dry_run)
+        # try:
+        #     if cmds:
+        #         logger.debug('#'*20+"     Start interproscan")
+        #         iprpros = Process(target=os.system,args=tuple(cmds))
+        #         iprpros.start()
+        #         iprpros.join()
+        #     else:
+        #         logger.debug("The interproscan has done\n\n"+'#'*20+'\n')
+        # except CalledProcessError as err:
+        #     logger.error(f"The interproscan fail to finish due to {err}\n\n"+'#'*20+'\n')
+        #     exit()
         ######### Run pseudofinder
         pseudocmd = f"mkdir -p {pseudo_oname} ; {pseudofinder_exe} annotate -db {diamond_db}  -g {ingbk} -t {num_cpu} -skpdb -op {pseudo_oname}/{genomename}_nr -di -l 0.8 --compliant --diamond_path {diamond_path}; "
         cmds = check(pseudofinder_finalname,pseudocmd,'pseudofinder',dry_run=dry_run)
@@ -180,6 +180,7 @@ def run_annotate(in_files,odir,temp_dir,dry_run=False):
         os.system(f"ln -sf `realpath {infaa}` {_odir}/{genomename}.faa")
         ### maybe wrong. since ffn maybe not existed.
         os.system(f"ln -sf `realpath {infaa.replace('.faa','.ffn')}` {_odir}/{genomename}.ffn")
+        os.system(f"ln -sf `realpath {infaa.replace('.faa','.fna')}` {_odir}/{genomename}.fna")
         
 # parse args
 @click.command()

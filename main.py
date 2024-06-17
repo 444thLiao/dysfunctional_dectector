@@ -18,7 +18,7 @@ a. Enter a name (e.g. ruegeria). We will download the protein sequences of the t
 import click
 import pandas as pd
 import os
-from os.path import exists
+from os.path import exists,join
 import multiprocessing as mp
 from subprocess import check_call
 import glob
@@ -43,7 +43,7 @@ def get_input_info(infile,fi):
         for index, row in df.iterrows():
             input_info[row['genome']]['faa'] = row['protein file']
             input_info[row['genome']]['gbk'] = row['gbk file']    
-        any_abrev = df.loc[df['abbrev'].isna(),:].shape[0]==0
+        any_abrev = df.loc[~df['abbrev'].isna(),:].shape[0]
         return input_info,any_abrev
     elif type(fi)==tuple and infile == "":
         #for faa_file,gbk_file in fi:
@@ -58,7 +58,7 @@ def get_input_info(infile,fi):
         exit()
 
 
-def run_command(cmd,module_name):
+def run_command(cmd,module_name,dry_run=False):
     try:
         check_call(cmd,shell=1)
         logger.debug(f"{module_name} module has done")
@@ -68,22 +68,32 @@ def run_command(cmd,module_name):
 
 def single_workflow(gbk,faa,out_folder,dry_run,addbytext):
     logger.debug(f"Now s1 module is running for {faa.split('/')[-1]}")
-    cmd = f"python3 {s1_path} -fi {faa} {gbk} -o {out_folder}/s1out "
-    run_command(cmd,"s1")
-    logger.debug("s1 module has finished.")
-    gbk_name = os.path.basename(gbk)
-    g_id = os.path.splitext(gbk_name)[0]
-    for filename in os.listdir(f"{out_folder}/s1out/ipr/{g_id}"):
-        old_path = f"{out_folder}/s1out/ipr/{g_id}/{filename}"
-        new_name = g_id + "." + filename.split(".")[-2] + "." + filename.split(".")[-1]
-        new_path = f"{out_folder}/s1out/ipr/{g_id}/{new_name}"
-        os.rename(old_path,new_path)   
-
-def merged_multiple_workflow(out_folder,num_gs,link_file=None):
-    if link_file is None:
-        cmd = f"python3 {s2_path} -o {out_folder}/s2out mlworkflow -i {out_folder}/s1out "  
+    odir = f"{out_folder}/s1out"
+    genomename = gbk.split('/')[-1].rsplit('.')[0]
+    kegg_oname = join(odir,'KOFAMSCAN',genomename+'.kofamout')
+    pseudo_oname = join(odir,'pseudofinder',genomename)
+    pseudofinder_finalname = join(pseudo_oname,f'{genomename}_nr_pseudos.gff')     
+    #logger.debug(f"Identifying {kegg_oname} and {pseudofinder_finalname}")   
+    if exists(kegg_oname) and exists(pseudofinder_finalname):
+        #logger.debug(f"s1 module [{genomename}] has finished.")
+        return 
     else:
-        cmd = f"python3 {s2_path} -o {out_folder}/s2out -lf {link_file} mlworkflow -i {out_folder}/s1out "  
+        cmd = f"python3 {s1_path} -fi {faa} {gbk} -o {out_folder}/s1out "
+        run_command(cmd,"s1",dry_run=dry_run)
+        logger.debug("s1 module has finished.")
+    # gbk_name = os.path.basename(gbk)
+    # g_id = os.path.splitext(gbk_name)[0]
+    # for filename in os.listdir(f"{out_folder}/s1out/ipr/{g_id}"):
+    #     old_path = f"{out_folder}/s1out/ipr/{g_id}/{filename}"
+    #     new_name = g_id + "." + filename.split(".")[-2] + "." + filename.split(".")[-1]
+    #     new_path = f"{out_folder}/s1out/ipr/{g_id}/{new_name}"
+    #     os.rename(old_path,new_path)   
+
+def merged_multiple_workflow(out_folder,num_gs,link_file=None,num_threads=8):
+    if link_file is None:
+        cmd = f"python3 {s2_path} -o {out_folder}/s2out mlworkflow -i {out_folder}/s1out -nt {num_threads}"  
+    else:
+        cmd = f"python3 {s2_path} -o {out_folder}/s2out -lf {link_file} mlworkflow -i {out_folder}/s1out -nt {num_threads}"  
     logger.debug("running : " + cmd)
     run_command(cmd,"s2")
     logger.debug("s2 module has finished. Now s3 module is running.")
@@ -152,9 +162,9 @@ def cli(infile,file_input,folder_output,dry_run,addbytext,num_threads):
     else:
         num_gs = len(input)
         if any_abrev:
-            merged_multiple_workflow(folder_output,num_gs,infile)
+            merged_multiple_workflow(folder_output,num_gs,infile,num_threads=num_threads)
         else:
-            merged_multiple_workflow(folder_output,num_gs)
+            merged_multiple_workflow(folder_output,num_gs,num_threads=num_threads)
     
     # logger.debug("The given file has been analyzed with s1,s2 and s3")
     # if addbytext:    
@@ -175,6 +185,4 @@ if __name__ == '__main__':
     cli()
 
 
-
-# python3 /home-user/thliao/script/dysfunctional_dectector/raw_workflow/s2.refine_annotation.py -o /mnt/ivy/thliao/project/coral_ruegeria/nanopore_processing/annotations/DFD/s2out mlworkflow -i /mnt/ivy/thliao/project/coral_ruegeria/nanopore_processing/annotations/DFD/s1out
 

@@ -34,6 +34,7 @@ from collections import defaultdict
 import warnings
 warnings.filterwarnings("ignore")
 from dysfunctional_dectector.src.utilities.tk import check,parse_gbk
+from dysfunctional_dectector.src.utilities.logging import logger
 
 debug = False
 ################################# parameters
@@ -51,7 +52,7 @@ def get_gfffile(inpattern):
         e = e.strip()
         f = [realpath(_) for _ in glob(e)]
         allf.extend(f)
-    print(f"found {len(allf)} gff file.")
+    logger.debug(f"found {len(allf)} gff file.")
     return allf
 
 @click.group()
@@ -89,8 +90,10 @@ def step1(ctx,):
     nr_fna = ctx.obj['nr_path']
     ########
     all_pids = set()
-    for f,gname in tqdm(zip(gff_list,names),desc='# of GFF files: '):
-        if 'merged_for' in f:continue
+    for f,gname in tqdm(zip(gff_list,names),total=len(gff_list),
+                        desc='# of GFF files for subj.pids: '):
+        if 'merged_for' in f:
+            continue
         f1 = f'{dirname(f)}/{gname}{suffix}_proteome.faa.blastP_output.tsv'
         f2 = f'{dirname(f)}/{gname}{suffix}_intergenic.fasta.blastX_output.tsv'
         df = pd.read_csv(f1,sep='\t',header=None)
@@ -108,14 +111,14 @@ def step1(ctx,):
     if exists(subnr_db):
         seqs = [_.id for _ in SeqIO.parse(subnr_db,'fasta')]
         missing_pids = set(all_pids) - set(seqs)
-        print(f"Existed subnr_db file, but we need to add {len(missing_pids)} more to it ")
+        logger.debug(f"Existed subnr_db file, but we need to add {len(missing_pids)} more to it ")
         with open(f'{odir}/subj_extra.pids','w') as f1:
             f1.write('\n'.join(missing_pids))
         if missing_pids:
             os.system(f"seqtk subseq {nr_fna} {odir}/subj_extra.pids >> {subnr_db}")
         os.system(f"diamond makedb --in {subnr_db} -d {subnr_db}.dmnd")
     else:
-        print(f"Run time consumeing step. Be patient (extracting sequences from nr file )")
+        logger.debug(f"Run time consumeing step. Be patient (extracting sequences from nr file )")
         os.system(f"seqtk subseq {nr_fna} {odir}/subj.pids > {subnr_db}")
         os.system(f"diamond makedb --in {subnr_db} -d {subnr_db}.dmnd")
     
@@ -156,8 +159,10 @@ def step2(ctx,gbkpattern):
     nodir = f"{odir}/merged_for/"
     if not exists(nodir):
         os.makedirs(nodir)
-    for gff,gname in tqdm(zip(gff_list,names),desc='# of GFF files: '):
+    for gff,gname in tqdm(zip(gff_list,names),desc='# of GFF files for *pseudos.fasta: '):
         if 'merged_for/' in gff:
+            continue
+        if exists(f'{nodir}/{gname}_pseudos.fasta'):
             continue
         records = []
         f1 = gff.replace('_pseudos.gff','_cds.fasta')
@@ -183,18 +188,21 @@ def step2(ctx,gbkpattern):
         allgbks.extend(f)
     allgbks = [gbk for gbk in allgbks 
                if gbk.split('/')[-1].replace('.gbk','') in names]    
-    print(f"found {len(allgbks)} for {len(names)} genomes.")
+    logger.debug(f"found {len(allgbks)} for {len(names)} genomes.")
     name2gbk = {gbk.split('/')[-1].replace('.gbk',''):gbk for gbk in allgbks}
-    for gff,gname in tqdm(zip(gff_list,names),desc='# of GFF files: '):
+    for gff,gname in tqdm(zip(gff_list,names),desc='# of GFF files for *_pos.tsv: '):
+        if exists(f'{nodir}/{gname}_pos.tsv'):
+            continue
         gbk = name2gbk[gname]
         IG_fna = gff.replace('_pseudos.gff','_intergenic.fasta')
         pseudo_fna = f'{nodir}/{gname}_pseudos.fasta'
         if not exists(f'{nodir}/{gname}_pos.tsv'):
             pos_df = parse_posdf(gbk,IG_fna,pseudo_fna)
-            pos_df.to_csv(f'{nodir}/{gname}_pos.tsv',sep='\t')
-        else:
-            pos_df = pd.read_csv(f'{nodir}/{gname}_pos.tsv',sep='\t',index_col=0)
             pos_df.columns = [int(_) if _!='pseudo' else _ for _ in pos_df.columns]
+            pos_df.to_csv(f'{nodir}/{gname}_pos.tsv',sep='\t')
+        # else:
+        #     pos_df = pd.read_csv(f'{nodir}/{gname}_pos.tsv',sep='\t',index_col=0)
+        #     pos_df.columns = [int(_) if _!='pseudo' else _ for _ in pos_df.columns]
 
 
 def determine_continuous(refbased_loc,length,min_dis=30,verbose=False):
@@ -290,8 +298,12 @@ def step3(ctx,uni=None):
     ref2len = {}
     for r in SeqIO.parse(subnr_db,'fasta'):
         ref2len[r.id] = len(r.seq)
+    if len(names)==1:
+        iter_n = names
+    else:
+        iter_n = tqdm(names,desc='# of genomes')
     gname2merged_pseudo = {}
-    for gname in tqdm(names):
+    for gname in iter_n:
         subffn = f"{nodir}/{gname}_pseudos.fasta"
         sub2len = {}
         for r in SeqIO.parse(subffn,'fasta'):
@@ -375,8 +387,12 @@ def merge(ctx,):
     subnr_db = ctx.obj['subnr']
     nodir = f"{odir}/merged_for/"
     ########
+    if len(names)==1:
+        iter_n = zip(gff_list,names)
+    else:
+        iter_n = tqdm(zip(gff_list,names))
     dfs = []
-    for gff,gname in tqdm(zip(gff_list,names)):
+    for gff,gname in iter_n:
         _df = pd.read_csv(gff,comment='#',sep='\t',header=None)
         _df.loc[:,'genome'] = gname
         dfs.append(_df)
