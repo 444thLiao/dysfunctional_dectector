@@ -111,28 +111,31 @@ def parse_alignment_(otab,contig,start,end):
     ## todo: speed it
     if os.path.getsize(otab)==0:
         return []
-    d = pd.read_csv(otab,sep='\t',header=None)
+    try:
+        d = pd.read_csv(otab,sep='\t',header=None)
+    except:
+        logger.debug(f'wrong file {otab}')
+        exit()
     found_locus = []
     d = d.loc[d[1]==contig,:]
     d.loc[:,'start'] = d[[8,9]].min(1)
     d.loc[:,'end'] = d[[8,9]].max(1)
-    subd = d.loc[~((d.end<=start-2000)|(d.start>=end+2000)),:]
+    subd = d.loc[~((d.end<=start-12000)|(d.start>=end+12000)),:]
+    # smaller offset(8000) likely cause the candidate gene are too few
     for i,row in subd.iterrows():
         s,e = row[['start','end']]
         i = P.closed(s, e)
         any_overlap = P.closed(start,end).overlaps(i)
         if any_overlap:
-            # intersection_r = P.closed(start,end).intersection(i)
-            # length = intersection_r.upper-intersection_r.lower+1
-            if int(row[2]) >= 50 and int(row[5])<=5:
+            intersection_r = P.closed(start,end).intersection(i)
+            length = intersection_r.upper-intersection_r.lower+1
+            if int(row[2]) >= 60 and int(row[5])<=5 and length >=50:
                 # pident and gapopen
                 found_locus.append(row[0])
     return found_locus
 
-def get_targetKO_from_alignment(subj_ffn,
-                                ref_fna,
-                                oodir,
-                                ):
+def get_targetKO_from_alignment(arg):
+    subj_ffn,ref_fna,oodir = arg
     sub_gid = subj_ffn.split('/')[-1].split('.')[0]
     gid = ref_fna.split('/')[-1].split('.')[0]
     otab = f"{oodir}/{gid}fna_{sub_gid}ffn.tab"
@@ -144,14 +147,13 @@ def get_targetKO_from_alignment(subj_ffn,
 
 def batch_process(indir,gid,ref_locus2info,odir,kolog_file):
     subj_ffn = f"{indir}/link_files/{gid}.ffn"
-    #locus2length = {_.id:len(_.seq) for _ in SeqIO.parse(subj_faa,'fasta')}
     found_locus = []
     for ref_locus,info in ref_locus2info.items():
         ref_gid = get_gid_from_locus(ref_locus)
         contig,start,end = [info[_] for _ in ['contig','start','end']]
         #logger.debug(f"{contig} {start} {end}")
         ref_fna = f"{indir}/link_files/{ref_gid}.fna"
-        otab = get_targetKO_from_alignment(subj_ffn,ref_fna,odir)
+        otab = get_targetKO_from_alignment((subj_ffn,ref_fna,odir))
         found_locus = parse_alignment_(otab,contig,start,end)
         #logger.debug(f"found {ko} in {gid} with {ref_gid}: {ref_locus}.......")
         if found_locus:
@@ -183,7 +185,7 @@ def refining_KOmatrix(kegg_df,
 
     """
     # noted: locus should be look like {GID}_{number}
-
+    _locus2ko = {}
     confident_presence = defaultdict(dict)
     gid2ko2intact_l = defaultdict(dict)
     gid2ko2pseudo_l = defaultdict(lambda :defaultdict(list))
@@ -213,6 +215,7 @@ def refining_KOmatrix(kegg_df,
                     pseudo_l.append(l)
                 else:
                     intact_l.append(l)
+                _locus2ko[l] = ko
             ko2intact_l[ko].extend(intact_l)
             confident_presence[gid][ko] = intact_l
             if all([_ in locus_is_pseudo for _ in all_l]):
@@ -247,6 +250,7 @@ def refining_KOmatrix(kegg_df,
                  desc="# of KOs: ")
     else:
         ko2row = ko2gid2status_df.iterrows()
+    cmds = []
     ko_idx = 0
     for ko,row in ko2row:
         logger.debug(f"Now is {ko_idx}/{len(ko2row)} KOs......")
@@ -259,21 +263,31 @@ def refining_KOmatrix(kegg_df,
         # ref_neighbouring_locus = get_neighbouring_profile(ref_locus)
         # ref_db_v = locus2other_analysis2ID[ref_locus]
         ref_locus_intact = ko2intact_l[ko]
-        ref_locus2info = genome_pos.loc[ref_locus_intact,['contig','start','end']].to_dict(orient='index')
-        
+        ref_locus2info = genome_pos.loc[ref_locus_intact,['contig','start','end']].to_dict(orient='index')        
+    #     for sub_gid in target_gids:
+    #         subj_ffn = f"{indir}/link_files/{gid}.ffn"
+    #         for ref_locus,info in ref_locus2info.items():
+    #             ref_gid = get_gid_from_locus(ref_locus)
+    #             otab = f"{oodir}/{gid}fna_{sub_gid}ffn.tab"
+    #             cmd = f"blastn -task blastn -query {subj_ffn} -db {oodir}/{ref_gid}fna -outfmt 6 -max_target_seqs 5 -evalue 1e-3 -qcov_hsp_perc 60 -num_threads 4  > {otab} "   
+    #             if not exists(otab) or os.path.getsize(otab)==0:
+    #                 cmds.append(cmd)
+    # cmds = list(set(cmds))
+    # sbatch_all(cmds,thread_per_tasks=4,prefix_name='blast',batch_size=100)
         ### batch module
+        
         args = []
         for gid in target_gids:
             kolog_file = f"{log_odir}/{gid}_{ko}.done"
             if not exists(kolog_file):
                 args.append((indir,gid,ref_locus2info,odir,kolog_file))
-        logger.debug(f"Now is {ko_idx}/{len(ko2row)} KOs......")
+        logger.debug(f"batch run {len(args)} tasks...")
         with mp.Pool(processes=num_threads) as tp:
             _ = list(tqdm(tp.imap(_batch,args), 
                           total=len(args),
                           desc='# tasks: '))   
         ### batch module
-        
+        logger.debug(f"parsing....")
         ko_idx += 1
         for gid in target_gids:
             # genomes without this ko
@@ -283,8 +297,11 @@ def refining_KOmatrix(kegg_df,
             else:
                 final_l,ref_locus = open(kolog_file).read().strip('\n').split('\n')[0].split('\t')
                 final_l = final_l.split(';')
-                if len(final_l)==0:
-                    continue
+            final_l = [_ for _ in final_l if _]
+            final_l = [_ for _ in final_l if not _locus2ko.get(_) ]
+            #print(final_l,gid)
+            if len(final_l)==0:   
+                continue
             recase2_l[gid][ko].extend([(_,ref_locus)  for _ in final_l ])
             if any([_ in locus_is_pseudo for _ in final_l]):
                 cases = 'not intact'
@@ -403,6 +420,7 @@ def processing_f(genome_pos,kegg_df,indir,odir,num_threads=8,kolist=[]):
     """
     Using alignment based method to reannotated missing genes
     """
+    #genome_pos = 
     locus_is_pseudo = set(list(genome_pos.index[genome_pos['pseudogenized'].str.contains(':')]))
     # Likely wrong, sometimes (extremely rare) a locus can be annotated to multiple KOs.
     #locus2ko, ko2ipr, ko2others, locus2other_analysis2ID = fromKOtoIPR(kegg_df,ipr_df)
@@ -444,18 +462,26 @@ def gen_genome_pos(gbk,pseudo_file):
 
     contig2interval = defaultdict(list)
     for _, row in pseudo_df_nano.iterrows():
-        contig2interval[row["contig"]].append( (P.closed(row["start"], row["end"]), _ )  )
+        contig2interval[row["contig"]].append((P.closed(row["start"], row["end"]), _ )  )
     sdf = locus2info
     pseudo = []
     for _, row in sdf.iterrows():
         cand = contig2interval[row["contig"]]
         s, e = row['start'], row['end']
         i = P.closed(s, e)
-        any_overlap = [c[1] for c in cand if c[0].overlaps(i)]
-        if len(any_overlap)!=0:
-            pseudo.append(';'.join(any_overlap))
+        any_overlap = [(c[0],c[1]) for c in cand if c[0].overlaps(i)]
+        pos = []
+        for inter,str_inter in any_overlap:
+            intersection_i = i.intersection(inter)
+            ratio = abs(intersection_i.upper-intersection_i.lower)/abs(e-s)*100
+            if ratio<=10:
+                continue
+            else:
+                pos.append(str_inter)
+        if len(pos)!=0:
+            pseudo.append(';'.join(pos))
         else:
-            pseudo.append('NOT')
+            pseudo.append('NOT')   
     sdf.loc[:, 'pseudogenized'] = pseudo  
     return sdf
 
@@ -483,13 +509,13 @@ def refine_pseudofinder(odir,dry_run=False):
         exit()    
         
     for output_gff in glob(pseudofinder_finalname):
+        genomename = output_gff.split('/')[-2]
+        pseudo_oname = os.path.join(odir,genomename)
+        pseudofinder_merged_file = os.path.join(pseudo_oname,f'pseudofinderALL_w_annot_MERGEDcontinuous.tsv')             
+        pos_oname = os.path.join(dirname(odir),'pos',genomename+'_pos.tsv')
         if exists(pos_oname):
             continue
-        genomename = output_gff.split('/')[-2]
-        pos_oname = os.path.join(dirname(odir),'pos',genomename+'_pos.tsv')
-        pseudo_oname = os.path.join(odir,genomename)
-        pseudofinder_merged_file = os.path.join(pseudo_oname,f'pseudofinderALL_w_annot_MERGEDcontinuous.tsv')     
-  
+
         ####
         cmd3 = f"python {mergedpseudo_script} -i {output_gff} -o {odir}/{genomename} -snr {odir}/subnr step3 -u {odir}/merged_for"
         cmd4 = f"python {mergedpseudo_script} -i {output_gff} -o {odir}/{genomename} merge "
@@ -511,9 +537,10 @@ def refine_pseudofinder(odir,dry_run=False):
         os.makedirs(dirname(pos_oname),exist_ok=True)
         pos_df.to_csv(pos_oname,sep='\t',index=1)
 
-def merged_multiple(indir,odir,genomelist=[],kolist=[],link_file=None,num_threads=8):
+def merged_multiple(indir,odir,genomelist=[],kolist=[],link_file=None,num_threads=8,refine_pseudo=False):
     logger.debug(f'processing the refinement of pseudofinder results...')
-    #refine_pseudofinder(f'{indir}/pseudofinder/',)
+    if refine_pseudo:
+        refine_pseudofinder(f'{indir}/pseudofinder/',)
     
     logger.debug(f"reading {indir} for {genomelist} ......")
     # input
@@ -522,7 +549,6 @@ def merged_multiple(indir,odir,genomelist=[],kolist=[],link_file=None,num_thread
                     for kofamout in kofamouts]
     ipr_outputs = glob(f'{indir}/ipr/*/*.faa.tsv')
     genome_pos_files = glob(f'{indir}/pos/*_pos.tsv')
-    num_gs = len(kofamout_tabs)
     if genomelist:
         kofamouts = [_ for _ in kofamouts
                      if _.split('/')[-1].rsplit('.')[0] in genomelist]
@@ -532,6 +558,7 @@ def merged_multiple(indir,odir,genomelist=[],kolist=[],link_file=None,num_thread
                        if _.split('/')[-2] in genomelist]
         genome_pos_files = [_ for _ in genome_pos_files
                             if _.split('/')[-1].rsplit('_pos')[0] in genomelist]
+        num_gs = len(kofamout_tabs)
     # output
     os.makedirs(odir,exist_ok=True)
     ko_infodf = f'{odir}/{num_gs}Genomes_raw_ko_info.tsv'
@@ -582,6 +609,8 @@ def merged_multiple(indir,odir,genomelist=[],kolist=[],link_file=None,num_thread
         logger.debug(f"processing {ofile}")
     oodir = f"{odir}/align"
     os.makedirs(oodir,exist_ok=True)
+    if genomelist:
+        kegg_df = kegg_df.reindex(genomelist)
     copy_df,bin_df,refined_kegg_df,recase2_l = processing_f(genome_pos,kegg_df,indir,oodir,num_threads=num_threads,kolist=kolist)
 
     output_file(refined_ko_infodf,copy_df)
@@ -619,7 +648,7 @@ def workflow(ctx,genome,indir,addbytext):
     indir = indir
     genome = genome
     accessory_name = addbytext
-    #main(indir,outputdir,genome,accessory_name)
+    main(indir,outputdir,genome,accessory_name)
 
 
 @cli.command()
@@ -627,8 +656,9 @@ def workflow(ctx,genome,indir,addbytext):
 @click.option('-gl','--genomelist',help="Input file containing the genome IDs you want to use or a comma-separated genome ids. ",required=False,default='')
 @click.option('-nt','--num_threads',type = int,help="number of threads.",required=False,default=8)
 @click.option('-kl','--kolist',help="Input file containing the KO IDs you want to use or a comma-separated genome ids. ",required=False,default='')
+@click.option("-rp","--refine_pseudo",help="refine_pseudo or not ",default=False,required=False,is_flag=True,)
 @click.pass_context
-def mlworkflow(ctx,indir,genomelist,num_threads,kolist):
+def mlworkflow(ctx,indir,genomelist,num_threads,kolist,refine_pseudo):
     outputdir = ctx.obj['odir']
     link_file = ctx.obj['link_file']
     indir = indir
@@ -644,7 +674,9 @@ def mlworkflow(ctx,indir,genomelist,num_threads,kolist):
         kolist = open(kolist).read().strip().split('\n')
     else:
         kolist = [_ for _ in kolist.split(',') if _]        
-    merged_multiple(indir,outputdir,genomelist=genomelist,link_file=link_file,num_threads=num_threads,kolist=kolist)
+    merged_multiple(indir,outputdir,
+                    refine_pseudo=refine_pseudo,
+                    genomelist=genomelist,link_file=link_file,num_threads=num_threads,kolist=kolist)
 
 ######### RUN
 if __name__ == '__main__':

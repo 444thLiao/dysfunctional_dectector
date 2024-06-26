@@ -21,7 +21,7 @@ from dysfunctional_dectector.src.utilities.tk import batch_iter, output_file
 
 
 def check_format(link_file):
-    link_df = pd.read_csv(link_file,sep='\t',index_col=0)
+    link_df = pd.read_csv(link_file,sep='\t',index_col=0,low_memory=False)
     assert len(set(['protein file','abbrev']).difference(set(link_df.columns)))==0
     for gid,row in link_df.iterrows():
         infaa = row['protein file']
@@ -93,7 +93,7 @@ def main(kegg_df,gid2info,ofile,outdir,strict_mode):
             print(f"perform Blastp {gid} vs {abbrev}")
             check_call([cmd],shell=1)
         # parse blastp table
-        gid2abbrev_df = pd.read_csv(f'{outdir}/{gid}_{abbrev}.tab',sep='\t',header=None)
+        gid2abbrev_df = pd.read_csv(f'{outdir}/{gid}_{abbrev}.tab',sep='\t',header=None,low_memory=False)
         l2l = {}
         for _,row in gid2abbrev_df.iterrows():
             if row[2]>=99:
@@ -136,7 +136,7 @@ def cli(link_file, KEGG_df_path, outdir,strict_mode):
     if not exists(outdir):
         os.makedirs(outdir)
     ofile = f"{outdir}/{basename(KEGG_df_path).rpartition('.')[0]+'_refined.'+basename(KEGG_df_path).rpartition('.')[-1]}"
-    kegg_df = pd.read_csv(KEGG_df_path,sep='\t',index_col=0)
+    kegg_df = pd.read_csv(KEGG_df_path,sep='\t',index_col=0,low_memory=False)
     gid2info = check_format(link_file)
     shared_gid = set(gid2info.index).intersection(kegg_df.index)
     print(f"Found {gid2info.shape[0]} in link_file and {len(shared_gid)} shared with KEGG_df.")
