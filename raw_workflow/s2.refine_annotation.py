@@ -558,7 +558,7 @@ def merged_multiple(indir,odir,genomelist=[],kolist=[],link_file=None,num_thread
                        if _.split('/')[-2] in genomelist]
         genome_pos_files = [_ for _ in genome_pos_files
                             if _.split('/')[-1].rsplit('_pos')[0] in genomelist]
-        num_gs = len(kofamout_tabs)
+    num_gs = len(kofamout_tabs)
     # output
     os.makedirs(odir,exist_ok=True)
     ko_infodf = f'{odir}/{num_gs}Genomes_raw_ko_info.tsv'

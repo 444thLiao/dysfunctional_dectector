@@ -74,13 +74,13 @@ def single_workflow(gbk,faa,out_folder,dry_run,addbytext):
     pseudo_oname = join(odir,'pseudofinder',genomename)
     pseudofinder_finalname = join(pseudo_oname,f'{genomename}_nr_pseudos.gff')     
     #logger.debug(f"Identifying {kegg_oname} and {pseudofinder_finalname}")   
-    if exists(kegg_oname) and exists(pseudofinder_finalname):
-        #logger.debug(f"s1 module [{genomename}] has finished.")
-        return 
-    else:
-        cmd = f"python3 {s1_path} -fi {faa} {gbk} -o {out_folder}/s1out "
-        run_command(cmd,"s1",dry_run=dry_run)
-        logger.debug("s1 module has finished.")
+    # if exists(kegg_oname) and exists(pseudofinder_finalname):
+    #     #logger.debug(f"s1 module [{genomename}] has finished.")
+    #     return 
+    # else:
+    cmd = f"python3 {s1_path} -fi {faa} {gbk} -o {out_folder}/s1out "
+    run_command(cmd,"s1",dry_run=dry_run)
+    logger.debug("s1 module has finished.")
     # gbk_name = os.path.basename(gbk)
     # g_id = os.path.splitext(gbk_name)[0]
     # for filename in os.listdir(f"{out_folder}/s1out/ipr/{g_id}"):
@@ -91,9 +91,9 @@ def single_workflow(gbk,faa,out_folder,dry_run,addbytext):
 
 def merged_multiple_workflow(out_folder,num_gs,link_file=None,num_threads=8):
     if link_file is None:
-        cmd = f"python3 {s2_path} -o {out_folder}/s2out mlworkflow -i {out_folder}/s1out -nt {num_threads}"  
+        cmd = f"python3 {s2_path} -o {out_folder}/s2out mlworkflow -i {out_folder}/s1out -nt {num_threads} -rp"  
     else:
-        cmd = f"python3 {s2_path} -o {out_folder}/s2out -lf {link_file} mlworkflow -i {out_folder}/s1out -nt {num_threads}"  
+        cmd = f"python3 {s2_path} -o {out_folder}/s2out -lf {link_file} mlworkflow -i {out_folder}/s1out -nt {num_threads} -rp"  
     logger.debug("running : " + cmd)
     run_command(cmd,"s2")
     logger.debug("s2 module has finished. Now s3 module is running.")
