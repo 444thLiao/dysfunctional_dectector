@@ -90,7 +90,7 @@ def single_workflow(gbk,faa,out_folder,dry_run,addbytext):
         os.rename(old_path,new_path)   
 
 def merged_multiple_workflow(out_folder,num_gs):
-    cmd = f"python3 {s2_path} -o {out_folder}/s2out multiple_workflow -i {out_folder}/s1out "  
+    cmd = f"python3 {s2_path} -o {out_folder}/s2out mlworkflow -i {out_folder}/s1out "  
     logger.debug("running : " + cmd)
     run_command(cmd,"s2")
     logger.debug("s2 module has finished. Now s3 module is running.")
@@ -133,7 +133,7 @@ def combine_result(s2_out,s3_out):
 # parse args
 @click.command()
 @click.option('--infile','-i',help="An Metadata file as input. See example file in XXXX",required=False,default=None)
-@click.option('-fi',"--file_input",type = str, nargs = 2 ,required = False, prompt = "Enter the input file name", help = "Please input faa and gbk file you want to analyze")
+@click.option('-fi',"--file_input",type = str, nargs = 2 ,required = False)
 @click.option('-o',"--folder_output",type = str, nargs = 1 ,required = True, prompt = "Enter the output folder name", help = "Please output path of folder you want to store the analysis results. ")
 @click.option("-d","--dry_run",help="Generate command only.",default=False,required=False,is_flag=True,)
 @click.option('-at','--addbytext',type = str,help="Input a name for searching  accessory genomes and use them to correct the genome you want to annotated.",required=False,default='')
