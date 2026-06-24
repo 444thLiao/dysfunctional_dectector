@@ -7,7 +7,10 @@ from Bio import SeqIO
 pd.options.display.expand_frame_repr = False
 import io
 from glob import glob
-
+from os.path import *
+import os
+import pandas as pd
+from pygenomeviz import GenomeViz
 import matplotlib.pyplot as plt
 import plotly.express as px
 from dna_features_viewer import GraphicFeature, GraphicRecord
@@ -15,18 +18,7 @@ from dna_features_viewer import GraphicFeature, GraphicRecord
 import warnings;warnings.filterwarnings('ignore')
 from IPython.display import display,Image
 
-gid2nano_faa = {
-    faa.split("/")[-3]: faa
-    for faa in glob(f"/mnt/ivy/thliao/project/coral_ruegeria/nanopore_processing/canu_o/*/09_prokka/*.faa") 
-    if '_' not in faa.split('/')[-1]}
 
-gid2nano_fna = {gid:realpath(faa).replace('.faa','.fna') 
-                for gid,faa in gid2nano_faa.items()}
-
-contig2seq = {}
-for _,f in gid2nano_fna.items():
-    contig2seq.update({_.id:_ for _ in SeqIO.parse(f,'fasta')})
-    
 merged_pseudo = pd.read_csv("/mnt/ivy/thliao/project/coral_ruegeria/nanopore_processing/annotations/pseudofinder/pseudofinderALL_w_annot_MERGEDcontinuous.tsv",sep='\t',index_col=0)    
 
 ko_info = pd.read_csv(
@@ -280,5 +272,155 @@ for ko,col in fullcurated_df.loc[:,substats_df.columns].iteritems():
             show_two_locus(locus_list,l2cog=l2cog,highlight_locus=[ref_locus])
             #print(gid)
 
+
+
+########### validating two locus via alignment .
+from Bio.SeqFeature import SeqFeature, FeatureLocation
+def add_pseudo_fea(contig,merged_pseudo):
+    if merged_pseudo is None:
+        return contig
+    else:
+        sub_pseudo = merged_pseudo.loc[merged_pseudo.contig==contig.id]
+        for i,row in sub_pseudo.iterrows():
+            fn = SeqFeature(FeatureLocation(row['start'],
+                                        row['end']),
+                        type="pseudo",
+                        qualifiers=dict(locus_tag=['pseudo'],),
+                        strand=0,)
+            contig.features.append(fn)
+        return contig
+    
+def get_align(genome_pos,
+              ref_gid,sub_gid,
+              ref_locus,
+              subj_locus,dist_bp = 5000,merged_pseudo=None):
+
+    gbk1 = f"/mnt/ivy/thliao/project/coral_ruegeria/nanopore_processing/canu_o/{ref_gid}/09_prokka/{ref_gid}.gbk"
+    gbk2 = f"/mnt/ivy/thliao/project/coral_ruegeria/nanopore_processing/canu_o/{sub_gid}/09_prokka/{sub_gid}.gbk"
+
+    ref_contig,ref_start,ref_end = genome_pos.loc[ref_locus,['contig','start','end']]
+    ref_start,ref_end = ref_start-dist_bp,ref_end+dist_bp
+
+    subj_contig,subj_start,subj_end = genome_pos.loc[subj_locus,['contig','start','end']]
+    subj_start,subj_end = subj_start-dist_bp,subj_end+dist_bp  
+    
+    
+    records = {_.id:_ for _ in SeqIO.parse(gbk1,'genbank')}
+    contig = records[ref_contig]
+    contig = add_pseudo_fea(contig,merged_pseudo)
+    ref_gbk = contig[ref_start:ref_end]
+    
+    f = [fea for fea in ref_gbk.features if fea.qualifiers.get('locus_tag',[''])[0]==ref_locus and fea.type=='CDS']
+    if f[0].strand == -1:
+        oid = ref_gbk.id
+        ref_gbk = ref_gbk.reverse_complement()
+        ref_gbk.id = oid
+    with open('./ref.fasta','w') as f1:
+        SeqIO.write(ref_gbk,f1,'fasta-2line')        
+    records = {_.id:_ for _ in SeqIO.parse(gbk2,'genbank')}
+    contig = records[subj_contig]
+    contig = add_pseudo_fea(contig,merged_pseudo)
+    subj_gbk = contig[subj_start:subj_end]
+    
+    f = [fea for fea in subj_gbk.features if fea.qualifiers.get('locus_tag',[''])[0]==subj_locus and fea.type=='CDS']
+    if f[0].strand == -1:
+        oid = subj_gbk.id
+        subj_gbk = subj_gbk.reverse_complement()
+        subj_gbk.id = oid
+    with open('./subj.fasta','w') as f1:
+        SeqIO.write(subj_gbk,f1,'fasta-2line')   
+
+    cmd = f"blastn -task blastn -query ref.fasta -subject subj.fasta -outfmt 6 > ./tmp.tab"
+    os.system(cmd)
+    return ref_gbk,subj_gbk
+
+def manual_check_validation(genome_pos,
+                            ref_locus,
+                            subj_locus,
+                            merged_pseudo=None,
+                            dist_bp = 5000,
+                            title_text=''):
+    # name: O6fna_L7nucl.tab
+    ref_gid = ref_locus.split('_')[0]
+    subj_gid = subj_locus.split('_')[0]
+
+    highlighted_locus = subj_locus.split(',')
+    if ',' in subj_locus:
+        subj_locus = subj_locus.split(',')[0]
+    ref_gbk,subj_gbk = get_align(genome_pos,ref_gid,subj_gid,ref_locus,subj_locus,dist_bp=dist_bp,merged_pseudo=merged_pseudo)
+
+
+    f1 = [(f.location.start.real,
+        f.location.end.real,
+        f.location.strand) for f in ref_gbk.features if f.type=='CDS']
+    f2 = [(f.location.start.real,
+        f.location.end.real,
+        f.location.strand) for f in subj_gbk.features if f.type=='CDS']
+
+    p1 = [(f.location.start.real,
+        f.location.end.real,
+        f.location.strand) for f in ref_gbk.features if f.type=='pseudo']
+    p2 = [(f.location.start.real,
+        f.location.end.real,
+        f.location.strand) for f in subj_gbk.features if f.type=='pseudo']
+        
+    genome_list = [
+        dict(name=ref_gid, size=len(ref_gbk.seq), features=f1,pseudo=p1),
+        dict(name=subj_gid, size=len(subj_gbk.seq), features=f2,pseudo=p2),
+    ]
+    g_feas = [ ref_gbk,subj_gbk]
+
+    gv = GenomeViz(fig_width=10,link_track_ratio=0.5)
+    
+    for gidx,genome in enumerate(genome_list):
+        name, size, features = genome["name"], genome["size"], genome["features"]
+        track = gv.add_feature_track(name, size)
+   
+        for idx, feature in enumerate(features):
+            _gbk = g_feas[gidx]
+            feas = [_ for _ in _gbk.features if _.type=='CDS']
+            fea = feas[idx]
+            name = fea.qualifiers.get('gene',[''])[0]
+            if not name:
+                name = fea.qualifiers.get('locus_tag',[''])[0]
+            start, end, strand = feature
+            if fea.qualifiers.get('locus_tag',[''])[0] in [ref_locus]+highlighted_locus:
+                track.add_feature(start, end, strand, 
+                              label=name,
+                            facecolor='red',linewidth=1,arrow_shaft_ratio=1.0,
+                            )
+            else:
+                track.add_feature(start, end, strand, 
+                            facecolor='#0078d7',
+                            label=name,arrow_shaft_ratio=1.0,
+                            )
+    if getsize('./tmp.tab')==0:
+        pass
+    else:
+        link_text = pd.read_csv('./tmp.tab',sep='\t',header=None,)
+        for _,row in link_text.iterrows():
+            name1 = row[0].split("_")[0]
+            name2 = row[1].split("_")[0]
+            s,e = row[[6,7]]
+            _s,_e = row[[8,9]]
+            gv.add_link((name1,s,e), (name2,_s,_e),curve=True,
+                        v=float(row[2]), vmin=50)
+            #gv.set_colorbar(["grey",], vmin=50)
+    fig = gv.plotfig()
+    track_list = gv.feature_tracks
+    for track in track_list:
+        name = track.name
+        d = [_ for _ in genome_list if _['name']==name][0]
+        for pseudo_fea in d['pseudo']:
+            start, end, strand = pseudo_fea
+            start,end = track.transform_coord(start),track.transform_coord(end)
+            x, y = (start, end, end, start), (-1, -1, 1, 1)
+            track.ax.fill(x, y, fc="#10d269", alpha=0.5, zorder=-1)         
+            
+    if title_text:
+        ax = fig.get_axes()[0]
+        ax.set_title(title_text,y=2,fontdict={'fontsize':19}) 
+    #os.system(f"rm ./tmp.tab")
+    return fig
 
 
