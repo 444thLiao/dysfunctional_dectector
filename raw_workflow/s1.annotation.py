@@ -26,9 +26,9 @@ pseudofinder_diamond_db = '/home-db/pub/protein_db/nr/v20230523/diamond_index/nr
 diamond_path = '/home-db/pub/protein_db/nr/v20230523/diamond_index/diamond'
 diamond_db = "/home-db/pub/protein_db/nr/v20230523/diamond_index/nr.dmnd"
 pseudofinder_exe = 'python3 /mnt/storage3/yfdai/download/pseudofinder/pseudofinder-master/pseudofinder.py'
-#ipr_exe = '/mnt/storage3/yfdai/download/interproscan/interproscan-5.67-99.0/interproscan.sh'
-num_cpu = 5
-
+ipr_exe = '/mnt/storage3/yfdai/download/interproscan/interproscan-5.67-99.0/interproscan.sh'
+num_cpu = 24
+mergedpseudo_script = join(dirname(dirname(__file__)),'src','pseudofinder_api','merged_pseudo.py')
 
 suffix_gbk = 'gbk'
 suffix_protein = 'faa'

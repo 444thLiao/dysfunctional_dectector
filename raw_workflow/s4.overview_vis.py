@@ -1,3 +1,6 @@
+#import modules
+from dysfunctional_dectector.src.utilities.tk import output_file
+from dysfunctional_dectector.src.utilities.tk import  ko2gename
 import sys
 sys.path.insert(0,'/home-user/thliao/script/evol_tk')
 from Bio import Phylo
@@ -6,41 +9,170 @@ from ete3 import Tree
 import io,os
 from collections import defaultdict
 from tqdm import tqdm
-import pandas as pd
 import numpy as np
 import plotly
 from glob import glob
-from IPython.display import Image,display
+# from IPython.display import Image,display
 import pandas as pd
 from api_tools import tree_vis, read_tree, sort_tree
-import  pandas as pd
-g2pop = pd.read_csv('/mnt/ivy/thliao/project/coral_ruegeria/Merged_popcogeneT/1623Ruegeria_MCs.tsv',sep='\t',index_col=0)
-g2pop = g2pop['MC'].to_dict()
-
 import re
+from dysfunctional_dectector.src.utilities.logging import *
+import click
+
+#static setting
+g2pop = pd.read_csv('/mnt/ivy/thliao/project/coral_ruegeria/Merged_popcogeneT/1783Ruegeria_MCs.tsv',sep='\t',index_col=0)
+g2pop = g2pop['MC'].to_dict()
+mc2genomes = {c: [g for g, _c in g2pop.items() if _c == c]for genome, c in g2pop.items()} 
+pop2color = {row.split(',')[2]:row.split(',')[1] for row in open('/mnt/ivy/thliao/project/coral_ruegeria/Merged_popcogeneT/genome2MC_lt3_colorstrip.txt').read().split('\n') if len(row.split(','))==3}
+pop2color['MC59.1'] = pop2color['MC59']
+pop2color['MC59.2'] = pop2color['MC59']
+g2l_file = '/mnt/ivy/thliao/project/coral_ruegeria/data_processing/phylogeny/itol/genome2location_colorstrip.txt'
+gid2l = {_.split(',')[0]:_.split(',')[2] for _ in open(g2l_file).read().split('\n') if len(_.split(','))==3 and _.split(',')[1].startswith('#') }
+cmap_l = {_.split(',')[2]:_.split(',')[1] for _ in open(g2l_file).read().split('\n') if len(_.split(','))==3 and _.split(',')[1].startswith('#') }
+g2c_file = '/mnt/ivy/thliao/project/coral_ruegeria/data_processing/phylogeny/itol/genome2compartment_colorstrip.txt'
+gid2c = {_.split(',')[0]:_.split(',')[2] for _ in open(g2c_file).read().split('\n') if len(_.split(','))==3 and _.split(',')[1].startswith('#') }
+cmap_c = {_.split(',')[2]:_.split(',')[1] for _ in open(g2c_file).read().split('\n')  if len(_.split(','))==3 and _.split(',')[1].startswith('#') }
+g2cs_file = '/mnt/ivy/thliao/project/coral_ruegeria/data_processing/phylogeny/itol/coral_species_colorstrip.txt'
+gid2cs = {_.split(',')[0]:_.split(',')[2] for _ in open(g2cs_file).read().split('\n') if len(_.split(','))==3 and _.split(',')[1].startswith('#') }
+
+#check the value of the input file 
+def format_check(folder_in):
+    all_module = os.listdir(folder_in)
+    all_path = [f"{in_folder}/{_}" for _ in all_module]
+    for file_in in all_path:
+        df_in = pd.read_csv(file_in, sep='\t')
+        df_geno = df_in.iloc[:-1,1:]
+        if df_in.size != df_in.shape[0]*df_in.shape[1]:
+            logger.debug(f"The number of value in the record is wrong")
+            exit()
+        for index, row in df_geno.iterrows():
+            for column, value in row.iteritems():
+                if value in {"intact","no KEGG-annotated","confident pseudo","RE(intact)","RE(not intact)","not intact"}:
+                    pass
+                elif pd.isna(value):
+                    pass
+                else:
+                    logger.debug(f"the value of the records is wrong")
+                    exit() 
+        for number in df_in.columns.tolist()[1:]:
+            if number.startswith("K"):
+                pass
+            else:
+                logger.debug(f"the ko annotation is incorrect")
+                exit()
+def get_exclusion(in_folder,exclude_collection):
+    df_list=[]
+    if exclude_collection:
+        valid_name = []
+        _m = set(exclude_collection)
+        all_module = os.listdir(in_folder)
+        all_name = list(set([_.rsplit('.', 1)[0].rsplit('_', 1)[0] for _ in all_module]))
+        for name in all_name:
+            if name in _m:
+                pass
+            else:
+                valid_name.append(name)
+            # for m,name in [('M00844','L-Ala'),
+            #         ('M00019','L-Val'),
+            #         ('M00432','L-Leu'),
+            #         ('M00570','L-Ile'),
+            #         ('M00118','L-Glu'),
+            #         ('M00844','L-Arg'),
+            #         ('M00015','L-Pro'),
+            #         ('M00026','L-His'),
+            #         ('M00023','L-Trp'),
+            #         ('M00040','L-Tyr'),
+            #         ('M00024','L-Phe'),
+            #         ('M00017','L-Met'),
+            #         ('M00021','L-Cys'),
+            #         ('M00020','L-Ser'),
+            #         ('M00016','L-Lys'),
+            #         ('M00013','beta-Ala')
+            #                 ]:
+            #     m = 'M00036'
+                # if m not in _m:
+                #     continue
+        valid_path = [f"{in_folder}/{_}_info.tsv" for _ in valid_name]
+        # related_kos = []
+        # for _ in _m[m].values():
+        #     for k in _:
+        #         for _k in re.findall("K\d+",str(k)):
+        #             related_kos.append(_k)
+        for file in valid_path:
+            df = pd.read_csv(file, sep='\t')
+            column_name = df.columns.tolist()
+            if 'K13541' in column_name:
+                df = df.drop('K13541', axis=1)      
+            if 'K00246' in column_name:
+                df = df.drop('K00246', axis=1) 
+            if 'K00247' in column_name:
+                df = df.drop('K00247', axis=1) 
+            subdf = df.fillna(0)
+            subdf = subdf.loc[:,~subdf.isna().all(0)]
+            df_list.append(subdf)
+        #logger.debug(f"www.genome.jp/module/{m}+"+'+'.join(subdf.columns))
+    else:
+        all_module = os.listdir(in_folder)
+        for module in all_module:
+            module_path = f"{in_folder}/{module}"
+            df = pd.read_csv(module_path, sep='\t') 
+            subdf = df.fillna(0)
+            subdf = subdf.loc[:,~subdf.isna().all(0)]
+            df_list.append(subdf)
+    return df_list
+###change the value in the given dataframe
+def convert_df(df_in):
+    v2values = {'intact':1, 
+                'no KEGG-annotated':0, 
+                'confident pseudo':0.2,
+                'RE(intact)':0.5, 
+                'RE(not intact)':0.5,
+                'not intact':0.5
+                }
+    value_df = df_in.replace(v2values)
+    return value_df
+###get the tree for the graph
+          
+###get graph
 def get_kname(ko):
     if not ko.startswith('K'):
         return ko
     name = kegg_get(ko).read().split('\n')[1].split(' ',1)[-1].strip().split(',')
     return name[-1].strip()
 
+def get_ko2name(in_folder):
+    kolist = []
+    all_module = os.listdir(in_folder)
+    all_path = [f"{in_folder}/{_}" for _ in all_module]
+    for file in all_path:
+        df = pd.read_csv(file, sep='\t')
+        column_name = df.columns.tolist()
+        kolist.extend(column_name)
+    kolist=list(set(kolist))
+    k2n = ko2gename(kolist)
+    return k2n
 
-def get_f1(module_based_df,mode='binary',
-           no_tree=False,
+def get_f1(module_based_df,
+           mode='binary',
+           tree = "",
            title_text=None,pseudo_df=None,
            width=1700,height=1500,yaxisfontsize=25,
            rename_y=lambda x:x,
            rename_x=lambda x:['' for _ in x],
-           xtickfontsize = 25,xtickangle=0,):
-
-    df = module_based_df.reindex(index = tre.get_leaf_names())
-    vt = tree_vis(tre, leaves2top=False)
+           xtickfontsize = 25,
+           xtickangle=0,
+           grouping = True):
+    if tree == "":
+        df = module_based_df[:-1]
+    else:
+        df = module_based_df[:-1].reindex(index = tree.get_leaf_names())
+        vt = tree_vis(tree, leaves2top=False)
     fig = plotly.tools.make_subplots(
         rows=1, cols=6, shared_yaxes=True, horizontal_spacing=0.05 / 3
     )
     
     for gid in df.index:
-        if no_tree:
+        if tree == "":
             continue
         fig.add_trace(go.Bar(x=[1],y=[1], marker={'color':pop2color.get(g2pop.get(gid,'Unknown'),'#ffffff'),'line':{'width':0}},name=gid+' '+g2pop.get(gid,''),showlegend=False),1,2)
 
@@ -123,12 +255,23 @@ def get_f1(module_based_df,mode='binary',
             xgap=4,ygap=4,
             colorbar=colorbar
         )
-    fig.append_trace(heatmap, 1, 6)
+    if grouping == True:
+        step_list = set(module_based_df[-1].value)
+        col_num= df.shape[1]
+        block_width = (width*0.8 - (col_num-1) * heatmap.xgap) /col_num
+        for i in len(step_list):
+            s_coord = module_based_df[module_based_df[-1]==f"step{i}"].idxmin(axis=0).astype(int)
+            f_coord = module_based_df[module_based_df[-1]==f"step{i}"].idxmax(axis=0).astype(int)
+            s = (s_coord-0.5)*(block_width+heatmap.xgap)
+            f = (f_coord+0.5)*(block_width+heatmap.xgap)
+            heatmap.add_shape(type="rect",x0=s, y0= 0, x1=f, y1= height, fillcolor="red", opacity=0.3, line={"width":heatmap['layout']['xaxis']['xgap']/4, "dash":"dash", "color":"red"})
+        fig.append_trace(heatmap, 1, 6)
     datas1 = vt.get_plotly_data(
         yscale=1, y_shift=-0.25,fix_length=None)
-    if not no_tree:
+    if tree != "":
         fig.add_traces(datas1, rows=[1] * len(datas1), cols=[1] * len(datas1))
 
+###get the axis of the graph
     default_xaxis = {"zeroline": False,
                      "showticklabels": False,
                      "showspikes": False,}
@@ -181,53 +324,42 @@ def get_f1(module_based_df,mode='binary',
     },)
     display(Image(fig.to_image()))
     return fig
-    
+def plot_graph(input_dataframe,tre,op):
+    f = get_f1(input_dataframe,
+                tree=tre,
+                rename_x=lambda x:[ko2name.get(_,'').split(',')[0].strip()+ f" ({_})" for _ in x],
+                rename_y=lambda x:[[gid2name[_]] if _ in gid2name else cus_rename([_]) for _ in x],
+                xtickangle=90,
+                #title_text=module_information[target_m][0]+' ' + target_m,
+                width=1000,height=700,yaxisfontsize=20,mode='custom')
+    outfile_name = basename(input_dataframe).split(".")[-1]
+    output_path =  op + "/" +outfile_name +"_ko2name.html"
+    f.write_html(output_path)
+    f = get_f1(input_dataframe,
+                tree=tre,
+                rename_x=lambda x:[ko2ec.get(_,'').split(',')[0].strip().split(';')[0]+ f" ({_})" for _ in x],
+                rename_y=lambda x:[[gid2name[_]] if _ in gid2name else cus_rename([_]) for _ in x],
+                xtickangle=90,
+                #title_text=module_information[target_m][0]+' ' + target_m,
+                width=1000,height=700,yaxisfontsize=20,mode='custom')
+    outfile_name = basename(input_dataframe).split(".")[-1]
+    output_path =  op + "/" + outfile_name +"_ko2ec.html"
+    f.write_html(output_path)
+
+@click.command()
+@click.option('--folder_input','-ni',type = str, nargs = 1 ,required = True, prompt = "Enter the input folder containing dataframes", help = "Please input the result of s3")
+@click.option('--tree','-tr',type = str, nargs = 1 , default = "",prompt = "Tree of the genomes", help = "Please input the corresponding tree file ")
+@click.argument('exclusion',type = str)
+@click.option('--folder_output', "-o", type=str, nargs=1, required=True, prompt="Enter the output folder name", help="Please input path of folder you want to analyze")
+def cli(folder_input,tree,exclusion,folder_output):
+    format_check(folder_input)
+    processed_df_list = get_exclusion(folder_input,exclusion)
+    ko2name = get_ko2name(folder_input)
+    for dataframe in processed_df_list:
+        ready_df = convert_df(dataframe)
+        plot_graph(ready_df,tree,folder_output)
 
 
-m = 'M00165'
-
-for m,name in [('M00844','L-Ala'),
-        ('M00019','L-Val'),
-        ('M00432','L-Leu'),
-        ('M00570','L-Ile'),
-        ('M00118','L-Glu'),
-        ('M00844','L-Arg'),
-        ('M00015','L-Pro'),
-        ('M00026','L-His'),
-        ('M00023','L-Trp'),
-        ('M00040','L-Tyr'),
-        ('M00024','L-Phe'),
-        ('M00017','L-Met'),
-        ('M00021','L-Cys'),
-        ('M00020','L-Ser'),
-        ('M00016','L-Lys'),
-        ('M00013','beta-Ala')
-                 ]:
-    m = 'M00036'
-    if m not in _m:
-        continue
-    related_kos = []
-    for _ in _m[m].values():
-        for k in _:
-            for _k in re.findall("K\d+",str(k)):
-                related_kos.append(_k)
-    related_kos = [_ for _ in related_kos if _ not in ['K13541','K00246','K00247']]
-    subdf = fullcurated_bindf.fillna(0).reindex(columns=related_kos)
-    subdf = subdf.loc[:,~subdf.isna().all(0)]
-    print(f"www.genome.jp/module/{m}+"+'+'.join(subdf.columns))
-    f = get_f1(subdf,
-               no_tree=True,
-               rename_x=lambda x:[ko2name.get(_,'').split(',')[0].strip()+ f" ({_})" for _ in x],
-               rename_y=lambda x:[[gid2name[_]] if _ in gid2name else cus_rename([_]) for _ in x],
-               xtickangle=90,
-               #title_text=module_information[target_m][0]+' ' + target_m,
-               width=1000,height=700,yaxisfontsize=20,mode='custom')
-
-    f = get_f1(subdf,
-               no_tree=True,
-               rename_x=lambda x:[ko2ec.get(_,'').split(',')[0].strip().split(';')[0]+ f" ({_})" for _ in x],
-               rename_y=lambda x:[[gid2name[_]] if _ in gid2name else cus_rename([_]) for _ in x],
-               xtickangle=90,
-               #title_text=module_information[target_m][0]+' ' + target_m,
-               width=1000,height=700,yaxisfontsize=20,mode='custom')
-    break
+######## RUN
+if __name__ == '__main__':
+    cli()

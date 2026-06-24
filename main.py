@@ -79,21 +79,18 @@ def single_workflow(gbk,faa,out_folder,dry_run,addbytext):
     #     return 
     # else:
     cmd = f"python3 {s1_path} -fi {faa} {gbk} -o {out_folder}/s1out "
-    run_command(cmd,"s1",dry_run=dry_run)
-    logger.debug("s1 module has finished.")
-    # gbk_name = os.path.basename(gbk)
-    # g_id = os.path.splitext(gbk_name)[0]
-    # for filename in os.listdir(f"{out_folder}/s1out/ipr/{g_id}"):
-    #     old_path = f"{out_folder}/s1out/ipr/{g_id}/{filename}"
-    #     new_name = g_id + "." + filename.split(".")[-2] + "." + filename.split(".")[-1]
-    #     new_path = f"{out_folder}/s1out/ipr/{g_id}/{new_name}"
-    #     os.rename(old_path,new_path)   
+    run_command(cmd,"s1")
+    logger.debug("s1 module has finished.Now s2 module is running.")
+    gbk_name = os.path.basename(gbk)
+    g_id = os.path.splitext(gbk_name)[0]
+    for filename in os.listdir(f"{out_folder}/s1out/ipr/{g_id}"):
+        old_path = f"{out_folder}/s1out/ipr/{g_id}/{filename}"
+        new_name = g_id + "." + filename.split(".")[-2] + "." + filename.split(".")[-1]
+        new_path = f"{out_folder}/s1out/ipr/{g_id}/{new_name}"
+        os.rename(old_path,new_path)   
 
-def merged_multiple_workflow(out_folder,num_gs,link_file=None,num_threads=8):
-    if link_file is None:
-        cmd = f"python3 {s2_path} -o {out_folder}/s2out mlworkflow -i {out_folder}/s1out -nt {num_threads} -rp"  
-    else:
-        cmd = f"python3 {s2_path} -o {out_folder}/s2out -lf {link_file} mlworkflow -i {out_folder}/s1out -nt {num_threads} -rp"  
+def merged_multiple_workflow(out_folder,num_gs):
+    cmd = f"python3 {s2_path} -o {out_folder}/s2out mlworkflow -i {out_folder}/s1out "  
     logger.debug("running : " + cmd)
     run_command(cmd,"s2")
     logger.debug("s2 module has finished. Now s3 module is running.")
@@ -136,9 +133,9 @@ def run(x):
     return single_workflow(*x)
 # parse args
 @click.command()
-@click.option('--infile','-i',help="An Metadata file as input. See example file in XXXX",required=False,default=str)
-@click.option('-fi',"--file_input",type = str, nargs = 2 ,required = False, help = "Please input faa and gbk file you want to analyze",default=None)
-@click.option('-o',"--folder_output",type = str, nargs = 1 ,required = True, help = "Please output path of folder you want to store the analysis results. ")
+@click.option('--infile','-i',help="An Metadata file as input. See example file in XXXX",required=False,default=None)
+@click.option('-fi',"--file_input",type = str, nargs = 2 ,required = False)
+@click.option('-o',"--folder_output",type = str, nargs = 1 ,required = True, prompt = "Enter the output folder name", help = "Please output path of folder you want to store the analysis results. ")
 @click.option("-d","--dry_run",help="Generate command only.",default=False,required=False,is_flag=True,)
 @click.option('-at','--addbytext',type = str,help="Input a name for searching  accessory genomes and use them to correct the genome you want to annotated.",required=False,default='')
 @click.option('-nt','--num_threads',type = int,help="number of threads.",required=False,default=8)
